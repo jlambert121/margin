@@ -21,7 +21,7 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 - Folder tree, file filtering, and a clickable document outline.
 - Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling, with multiple document windows.
 - Search, word and character counts, line counts, and estimated reading time.
-- Paper, Parchment, and Midnight themes, plus paragraph focus and typewriter scrolling in live preview.
+- Light, Dark, and Auto appearance (follows macOS), plus paragraph focus and typewriter scrolling in live preview.
 - HTML export and native printing with Save as PDF.
 - Local images underneath the Markdown file's directory. Dropped or pasted image files are embedded as data URLs; no upload service is used.
 - Bundled editor and sanitizer assets; no analytics or network dependency at launch. Images with remote URLs load from their original hosts.

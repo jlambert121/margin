@@ -763,19 +763,6 @@ body.typewriter .toastui-editor-contents,body.typewriter .ProseMirror {
   padding-bottom:50vh
 }
 
-body[data-theme=sepia] {
-  --paper:#faf6ec;
-  --sidebar:#f1ede2;
-  --chrome:#faf6ec;
-  --text:#51493d;
-  --muted:#9a907e;
-  --line:#e5dfd1;
-  --hover:#eae4d7;
-  --select:#e5e7d8;
-  --code:#f1ecdf;
-  --accent:#6c7851
-}
-
 body[data-theme=dark] {
   color-scheme:dark;
   --paper:#202422;

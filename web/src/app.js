@@ -233,10 +233,21 @@
   function openMenu(id, trigger) {
     const wasHidden = $(id).hidden; closeMenus(); $(id).hidden = !wasHidden; $(trigger).setAttribute('aria-expanded', String(wasHidden));
   }
+  const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)');
+  let selectedTheme = 'auto';
+  function applyTheme() {
+    const dark = selectedTheme === 'dark' || (selectedTheme === 'auto' && systemAppearance.matches);
+    document.body.dataset.theme = dark ? 'dark' : 'light';
+    $('.toastui-editor-defaultUI').classList.toggle('toastui-editor-dark', dark);
+    document.querySelectorAll('button[data-theme]').forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.theme === selectedTheme));
+    });
+  }
+  systemAppearance.addEventListener('change', applyTheme);
   function theme(name) {
-    if (!['light', 'sepia', 'dark'].includes(name)) return;
-    document.body.dataset.theme = name;
-    $('.toastui-editor-defaultUI').classList.toggle('toastui-editor-dark', name === 'dark');
+    if (!['light', 'dark', 'auto'].includes(name)) name = 'auto';
+    selectedTheme = name;
+    applyTheme();
     try { localStorage.setItem('margin-theme', name); }
     catch { toast('The theme preference could not be saved.'); }
     closeMenus();
@@ -365,8 +376,8 @@
   if (native) {
     const base = document.createElement('base'); base.href = 'markdown-asset://local/'; document.head.append(base);
   }
-  let savedTheme = 'light';
-  try { savedTheme = localStorage.getItem('margin-theme') || 'light'; }
+  let savedTheme = 'auto';
+  try { savedTheme = localStorage.getItem('margin-theme') || 'auto'; }
   catch { toast('The saved theme could not be read.'); }
   theme(savedTheme);
   renderFiles(); refresh();

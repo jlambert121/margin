@@ -422,7 +422,11 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         case "openExternal":
             if let string = body["url"] as? String, let url = URL(string: string), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
         case "appearance":
-            window?.appearance = NSAppearance(named: (body["theme"] as? String) == "dark" ? .darkAqua : .aqua)
+            switch body["theme"] as? String {
+            case "light": window?.appearance = NSAppearance(named: .aqua)
+            case "dark": window?.appearance = NSAppearance(named: .darkAqua)
+            default: window?.appearance = nil
+            }
         default: break
         }
     }
@@ -715,7 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let format = menu("Format")
         command(format, "Bold", "format:bold", "b"); command(format, "Italic", "format:italic", "i"); command(format, "Strikethrough", "format:strike"); command(format, "Inline Code", "format:code"); format.addItem(.separator()); command(format, "Link…", "format:link", "k"); command(format, "Image…", "format:image")
         let view = menu("View")
-        command(view, "Toggle Sidebar", "sidebar", "l", modifiers: [.command, .shift]); command(view, "Document Outline", "outline"); command(view, "Source Mode", "source", "/"); view.addItem(.separator()); command(view, "Focus Mode", "focus", "f", modifiers: [.command, .shift]); command(view, "Typewriter Mode", "typewriter"); view.addItem(.separator()); command(view, "Paper", "theme:light"); command(view, "Parchment", "theme:sepia"); command(view, "Midnight", "theme:dark"); view.addItem(.separator()); item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", modifiers: [.command, .control])
+        command(view, "Toggle Sidebar", "sidebar", "l", modifiers: [.command, .shift]); command(view, "Document Outline", "outline"); command(view, "Source Mode", "source", "/"); view.addItem(.separator()); command(view, "Focus Mode", "focus", "f", modifiers: [.command, .shift]); command(view, "Typewriter Mode", "typewriter"); view.addItem(.separator()); command(view, "Light", "theme:light"); command(view, "Dark", "theme:dark"); command(view, "Auto", "theme:auto"); view.addItem(.separator()); item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", modifiers: [.command, .control])
         let window = menu("Window"); item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"); item(window, "Zoom", #selector(NSWindow.performZoom(_:))); window.addItem(.separator()); item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:))); NSApp?.windowsMenu = window
         return bar
     }
