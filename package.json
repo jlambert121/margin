@@ -1,0 +1,15 @@
+{
+  "name": "margin",
+  "version": "0.1.5",
+  "private": true,
+  "description": "A native macOS Markdown editor with offline live preview",
+  "scripts": {
+    "build": "./scripts/build.sh",
+    "start": "./scripts/run.sh",
+    "test": "./scripts/test.sh",
+    "test:dom": "node tests/editor-dom.mjs",
+    "test:native": "./scripts/test-native.sh --ui",
+    "test:webkit": "./scripts/test-webkit.sh"
+  },
+  "devDependencies": { "happy-dom": "20.8.4" }
+}

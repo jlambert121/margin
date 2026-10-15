@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http: markdown-asset:; connect-src 'none'; font-src 'self' data:">
+<title>Margin</title>
+<link rel="stylesheet" href="vendor/toastui-editor.min.css">
+<link rel="stylesheet" href="vendor/toastui-editor-dark.min.css">
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+<div id="app">
+<aside id="sidebar" aria-label="Document navigation">
+  <div class="sidebar-title"><span class="app-mark">M<span>↓</span></span><span>Margin</span></div>
+  <div class="tabs" role="tablist" aria-label="Sidebar view">
+    <button id="files-tab" role="tab" aria-selected="true">Files</button>
+    <button id="outline-tab" role="tab" aria-selected="false">Outline</button>
+  </div>
+  <div id="files-panel" role="tabpanel" aria-labelledby="files-tab">
+    <div class="folder-heading"><span id="folder-name">WORKSPACE</span><button id="refresh-folder" class="icon-button" title="Refresh folder" aria-label="Refresh folder">↻</button></div>
+    <input id="file-filter" type="search" placeholder="Filter files…" aria-label="Filter files">
+    <div id="file-tree"></div>
+    <div id="empty-workspace"><div class="folder-symbol">▱</div><strong>Your words, in one place.</strong><p>Open a folder to browse your<br>Markdown files.</p><button class="secondary" data-action="openFolder">Open Folder… <kbd>⇧⌘O</kbd></button></div>
+  </div>
+  <div id="outline-panel" role="tabpanel" aria-labelledby="outline-tab" hidden><div class="folder-heading">ON THIS PAGE</div><nav id="outline" aria-label="Document outline"></nav></div>
+  <div class="sidebar-footer"><button data-action="new" title="New document (⌘N)">＋ <span>New document</span></button><button data-action="open" class="icon-button" title="Open file (⌘O)" aria-label="Open file">↗</button></div>
+</aside>
+<main>
+  <header id="toolbar">
+    <div class="toolbar-left"><button id="toggle-sidebar" class="icon-button" title="Toggle sidebar (⇧⌘L)" aria-label="Toggle sidebar"><svg viewBox="0 0 20 20"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M7.5 4v12"/></svg></button><span class="divider"></span><span id="document-name">Untitled.md</span><span id="modified-dot" title="Unsaved changes" hidden>●</span></div>
+    <div class="toolbar-right"><span id="mode-label">LIVE PREVIEW</span><button id="format-button" class="icon-button" title="Formatting options" aria-label="Formatting options" aria-expanded="false">Aa</button><button id="source-button" class="icon-button" title="Toggle source mode (⌘/)" aria-label="Toggle source mode" aria-pressed="false">&lt;/&gt;</button><button id="more-button" class="icon-button" title="View options" aria-label="View options" aria-expanded="false">•••</button></div>
+  </header>
+  <div id="find-bar" hidden><input id="find-input" type="search" placeholder="Find in document…" aria-label="Find in document"><span id="find-result"></span><button id="find-prev" aria-label="Previous match">↑</button><button id="find-next" aria-label="Next match">↓</button><button id="find-close" aria-label="Close find">×</button></div>
+  <div id="editor"></div>
+  <footer id="statusbar"><span id="save-status">Ready to write</span><div><button id="focus-button" title="Toggle focus mode (⇧⌘F)" aria-pressed="false">Focus</button><span class="status-divider"></span><button id="word-count" title="Document statistics">0 words</button><span id="reading-time">1 min read</span><span class="status-divider"></span><span>Markdown</span><span class="encoding">UTF-8</span></div></footer>
+</main>
+</div>
+<div id="format-menu" class="popover" hidden><div class="menu-caption">PARAGRAPH</div><button data-format="paragraph">Body text <kbd>⌘0</kbd></button><button data-format="h1">Heading 1 <kbd>⌘1</kbd></button><button data-format="h2">Heading 2 <kbd>⌘2</kbd></button><button data-format="h3">Heading 3 <kbd>⌘3</kbd></button><hr><button data-format="bold"><b>Bold</b> <kbd>⌘B</kbd></button><button data-format="italic"><i>Italic</i> <kbd>⌘I</kbd></button><button data-format="strike">Strikethrough</button><button data-format="code">Inline code</button><hr><button data-format="bulletList">Bullet list</button><button data-format="orderedList">Numbered list</button><button data-format="taskList">Task list</button><button data-format="blockquote">Quote</button><button data-format="codeBlock">Code block</button><button data-format="table">Insert table</button><button data-format="link">Insert link…</button><button data-format="image">Insert image…</button></div>
+<div id="view-menu" class="popover" hidden><div class="menu-caption">APPEARANCE</div><button data-theme="light">Paper <span>Light</span></button><button data-theme="sepia">Parchment <span>Warm</span></button><button data-theme="dark">Midnight <span>Dark</span></button><hr><button id="typewriter-button">Typewriter mode <span id="typewriter-check"></span></button><button data-action="exportHTML">Export HTML…</button><button data-action="print">Print / Save as PDF…</button></div>
+<dialog id="insert-dialog"><form method="dialog"><h2 id="insert-title">Insert link</h2><label id="insert-label">URL<input id="insert-url" type="text" required placeholder="https://"></label><label>Description<input id="insert-description" type="text"></label><div class="dialog-actions"><button value="cancel" formnovalidate>Cancel</button><button value="insert" class="primary">Insert</button></div></form></dialog>
+<div id="toast" role="status" hidden></div>
+<script src="src/diagnostics.js"></script>
+<script src="vendor/toastui-editor-all.min.js"></script>
+<script src="vendor/purify.min.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>

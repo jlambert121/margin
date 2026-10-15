@@ -1,0 +1,29 @@
+# Generated application bundles, tests, screenshots, and compiler caches
+/build/
+/.build/
+/DerivedData/
+
+# JavaScript dependencies and logs
+node_modules/
+*.log
+
+# macOS and editor-local files
+.DS_Store
+._*
+*.swp
+*.swo
+*~
+xcuserdata/
+*.xcuserstate
+
+# Local environment and signing credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+*.p12
+*.pfx
+*.key
+*.pem
+*.mobileprovision
+*.provisionprofile
