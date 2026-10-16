@@ -18,8 +18,8 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 
 - Editable rendered Markdown with headings, inline formatting, nested lists, task lists, quotes, tables, links, images, and fenced code blocks.
 - An exact-text Markdown source editor. Switching modes preserves the original source until an edit is made.
-- Folder tree, file filtering, and a clickable document outline.
-- Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling, with multiple document windows.
+- Open files list, folder tree, file filtering, and a clickable document outline.
+- Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling. Documents open as native macOS tabs and can be dragged out into their own windows.
 - Search, word and character counts, line counts, and estimated reading time.
 - Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
 - Paragraph focus and typewriter scrolling in live preview.
@@ -41,7 +41,7 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 | ⇧⌘L | Toggle sidebar |
 | ⌘P | Print / Save as PDF |
 
-Command-click links to open them. Clicking a file in the sidebar switches the current document, using native document handling for unsaved changes. Opening through File → Open creates a separate document window. The last workspace, appearance, and app icon are remembered.
+Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open as tabs in the current window. The sidebar's Open Files section lists that window's tabs; click one to switch to it, or × to close it with the usual unsaved-changes handling. Dropped images are still embedded in the document. The last workspace, appearance, and app icon are remembered.
 
 ## Implementation
 

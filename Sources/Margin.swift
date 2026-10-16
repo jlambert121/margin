@@ -23,6 +23,15 @@ final class MarkdownDocument: NSDocument {
     private var recoveryErrorReported = false
     var editorName: String { fileURL?.lastPathComponent ?? recoveredName ?? "Untitled.md" }
     override class var autosavesInPlace: Bool { true }
+    override var fileURL: URL? { didSet { (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh() } }
+    override func updateChangeCount(_ change: NSDocument.ChangeType) {
+        super.updateChangeCount(change)
+        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+    }
+    override func updateChangeCount(withToken changeCountToken: Any, for saveOperation: NSDocument.SaveOperationType) {
+        super.updateChangeCount(withToken: changeCountToken, for: saveOperation)
+        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+    }
 
     override func makeWindowControllers() {
         let controller = EditorWindowController(document: self)
@@ -202,8 +211,43 @@ final class MessageBridge: NSObject, WKScriptMessageHandler {
     }
 }
 
+// Markdown files dropped on the editor open as tabs; anything else, such as
+// images, still goes to WebKit for the editor's own drop handling.
+final class EditorWebView: WKWebView {
+    var onOpenFiles: (([URL]) -> Void)?
+    private var handlingFileDrop = false
+    static func markdownFiles(on pasteboard: NSPasteboard) -> [URL] {
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return !urls.isEmpty && urls.allSatisfy { markdownExtensions.contains($0.pathExtension.lowercased()) } ? urls : []
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        handlingFileDrop = !Self.markdownFiles(on: sender.draggingPasteboard).isEmpty
+        return handlingFileDrop ? .copy : super.draggingEntered(sender)
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        handlingFileDrop ? .copy : super.draggingUpdated(sender)
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        if handlingFileDrop { handlingFileDrop = false } else { super.draggingExited(sender) }
+    }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        handlingFileDrop || super.prepareForDragOperation(sender)
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard handlingFileDrop else { return super.performDragOperation(sender) }
+        handlingFileDrop = false
+        let urls = Self.markdownFiles(on: sender.draggingPasteboard)
+        guard !urls.isEmpty else { return false }
+        onOpenFiles?(urls)
+        return true
+    }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        if !handlingFileDrop { super.concludeDragOperation(sender) }
+    }
+}
+
 final class EditorWindowController: NSWindowController, WKScriptMessageHandler, WKNavigationDelegate {
-    let webView: WKWebView
+    let webView: EditorWebView
     let assets = AssetHandler()
     var ready = false
     private(set) var session = EditorSession()
@@ -212,7 +256,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     private var lastReportedError: String?
     private var failureText: NSTextView?
     private let logger = Logger(subsystem: "com.infiniteviewtech.margin", category: "Editor")
-    var pendingPath: URL?
+    private var tabObservation: NSKeyValueObservation?
     var doc: MarkdownDocument { document as! MarkdownDocument }
     var appDelegate: AppDelegate { NSApp.delegate as! AppDelegate }
 
@@ -220,7 +264,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(assets, forURLScheme: "markdown-asset")
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = EditorWebView(frame: .zero, configuration: configuration)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.minSize = NSSize(width: 700, height: 480)
         window.titlebarAppearsTransparent = true
@@ -230,7 +274,15 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         window.contentView = webView
         window.center()
         window.setFrameAutosaveName("MarginEditor")
+        window.tabbingMode = .preferred
+        window.tabbingIdentifier = "MarginEditor"
         super.init(window: window)
+        webView.onOpenFiles = { [weak self] urls in
+            guard let self, let window = self.window else { return }
+            self.appDelegate.openFiles(urls, asTabsIn: window)
+        }
+        // Fires when tabs are added, removed, reordered, or moved between windows.
+        tabObservation = window.observe(\.tabGroup?.windows) { [weak self] _, _ in self?.appDelegate.scheduleOpenFilesRefresh() }
         // NSDocument.addWindowController must attach us. Setting document here
         // makes AppKit treat that later call as redundant, so the document's
         // windowControllers stays empty and showWindows has nothing to show.
@@ -379,7 +431,8 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         }
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        // A tab closed while its editor was still loading can deliver messages after its document is gone.
+        guard document != nil, message.frameInfo.isMainFrame, let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         switch action {
         case "ready":
             guard !hasEditorFailure else { return }
@@ -390,6 +443,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             if session.isLoaded {
                 loadTimeout?.cancel(); loadTimeout = nil; webView.isHidden = false
                 send("theme", appDelegate.settings.appearance.rawValue)
+                sendOpenFiles()
             }
         case "changed":
             if let token = body["token"] as? String, let text = body["text"] as? String,
@@ -418,22 +472,35 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             if let path = body["path"] as? String, let folder = appDelegate.workspace {
                 let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
                 let root = folder.standardizedFileURL.resolvingSymlinksInPath()
-                guard url.path.hasPrefix(root.path + "/"), markdownExtensions.contains(url.pathExtension.lowercased()), url != doc.fileURL else { return }
-                pendingPath = url
-                doc.canClose(withDelegate: self, shouldClose: #selector(canSwitch(_:shouldClose:contextInfo:)), contextInfo: nil)
+                guard url.path.hasPrefix(root.path + "/"), markdownExtensions.contains(url.pathExtension.lowercased()), let window else { return }
+                appDelegate.openFiles([url], asTabsIn: window)
             }
+        case "selectOpenFile": selectTab(id: body["id"] as? String)
+        case "closeOpenFile": closeTab(id: body["id"] as? String)
         case "openExternal":
             if let string = body["url"] as? String, let url = URL(string: string), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
         default: break
         }
     }
-    @objc func canSwitch(_ document: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?) {
-        guard shouldClose, let url = pendingPath else { pendingPath = nil; return }
-        pendingPath = nil
-        appDelegate.controller.openDocument(withContentsOf: url, display: true) { _, _, error in
-            if let error { NSApp.presentError(error) }
-            else { document.close() }
-        }
+    var tabDocuments: [MarkdownDocument] {
+        guard let window else { return [] }
+        let open = appDelegate.controller.documents
+        return (window.tabbedWindows ?? [window]).compactMap { $0.windowController?.document as? MarkdownDocument }.filter { doc in open.contains { $0 === doc } }
+    }
+    private func tab(for id: String?) -> NSWindow? {
+        tabDocuments.first { $0.recoveryID.uuidString == id }?.editorController?.window
+    }
+    func selectTab(id: String?) { tab(for: id)?.makeKeyAndOrderFront(nil) }
+    // performClose keeps the standard unsaved-changes prompt, shown on its own tab.
+    func closeTab(id: String?) {
+        guard let tab = tab(for: id) else { return }
+        if (tab.windowController?.document as? NSDocument)?.isDocumentEdited == true { tab.makeKeyAndOrderFront(nil) }
+        tab.performClose(nil)
+    }
+    func sendOpenFiles() {
+        send("openFiles", tabDocuments.map { tab in
+            ["id": tab.recoveryID.uuidString, "name": tab.editorName, "path": tab.fileURL?.path ?? "", "modified": tab.isDocumentEdited, "current": tab === document] as [String: Any]
+        })
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated {
@@ -485,6 +552,14 @@ class DocumentController: NSDocumentController {
         [markdownType, plainTextType].contains(typeName) ? MarkdownDocument.self : nil
     }
     override var defaultType: String? { markdownType }
+    override func addDocument(_ document: NSDocument) {
+        super.addDocument(document)
+        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+    }
+    override func removeDocument(_ document: NSDocument) {
+        super.removeDocument(document)
+        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+    }
     override func typeForContents(of url: URL) throws -> String {
         guard url.isFileURL, markdownExtensions.contains(url.pathExtension.lowercased()) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
@@ -500,6 +575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let recoveryStore: RecoveryStore
     let settings: Settings
     private var settingsWindow: SettingsWindowController?
+    private var openFilesRefreshScheduled = false
     private var pendingFileOpens = 0
     private var launchFinished = false
     private var restorationFinished = false
@@ -604,6 +680,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if let error { self.controller.presentError(error) }
                 self.finishStartupIfReady()
             }
+        }
+    }
+    // Editor windows prefer tabs, so ordinary opens join the frontmost window.
+    // Drops and workspace clicks name their window, which may not be frontmost.
+    func openFiles(_ urls: [URL], asTabsIn window: NSWindow) {
+        for url in urls {
+            controller.openDocument(withContentsOf: url, display: false) { [weak self] document, alreadyOpen, error in
+                if let error { self?.controller.presentError(error); return }
+                guard let document else { return }
+                if document.windowControllers.isEmpty { document.makeWindowControllers() }
+                if !alreadyOpen, let tab = document.windowControllers.first?.window, tab !== window {
+                    (window.tabbedWindows?.last ?? window).addTabbedWindow(tab, ordered: .above)
+                }
+                document.showWindows()
+            }
+        }
+    }
+    func scheduleOpenFilesRefresh() {
+        guard !openFilesRefreshScheduled else { return }
+        openFilesRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.openFilesRefreshScheduled = false
+            for doc in self.controller.documents { (doc as? MarkdownDocument)?.editorController?.sendOpenFiles() }
         }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

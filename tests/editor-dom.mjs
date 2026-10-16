@@ -70,6 +70,24 @@ try {
     } finally { editor.getMarkdown = getMarkdown; }
     assert(nativeWindow.app.snapshot().text.includes('A newer edit.'), 'Retry did not read the previously unconverted edit');
   });
+  test('Open files list this window\'s tabs and ask native to switch or close them', () => {
+    const doc = nativeWindow.document;
+    assert(doc.querySelector('#open-files-section').hidden, 'Open files shown before native sent any');
+    nativeWindow.app.command('openFiles', [
+      { id: 'one', name: 'Current.md', path: '/notes/Current.md', modified: false, current: true },
+      { id: 'two', name: 'Other.md', path: '/notes/Other.md', modified: true, current: false },
+    ]);
+    const rows = [...doc.querySelectorAll('#open-files .open-file')];
+    assert(!doc.querySelector('#open-files-section').hidden && rows.length === 2, 'Open files not listed');
+    assert(rows[0].classList.contains('active') && !rows[1].classList.contains('active'), 'Current tab not highlighted');
+    assert(!rows[0].querySelector('.open-file-modified') && rows[1].querySelector('.open-file-modified'), 'Unsaved marker wrong');
+    rows[1].querySelector('.open-file-name').click();
+    assert(messages.at(-1).action === 'selectOpenFile' && messages.at(-1).id === 'two', 'Selecting a file did not reach native');
+    rows[1].querySelector('.open-file-close').click();
+    assert(messages.at(-1).action === 'closeOpenFile' && messages.at(-1).id === 'two', 'Closing a file did not reach native');
+    nativeWindow.app.command('openFiles', []);
+    assert(doc.querySelector('#open-files-section').hidden, 'Empty open files list still shown');
+  });
   test('JavaScript, dependency loading, and promise failures reach native error reporting', () => {
     nativeWindow.dispatchEvent(new nativeWindow.ErrorEvent('error', { message: 'A runtime failure' }));
     const script = nativeWindow.document.createElement('script');

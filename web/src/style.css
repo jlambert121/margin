@@ -189,6 +189,60 @@ button[aria-pressed=true] {
   color:var(--accent)
 }
 
+#open-files-section {
+  margin-bottom:14px
+}
+
+#open-files {
+  padding:0 10px
+}
+
+.open-file {
+  padding:0;
+  gap:0
+}
+
+.open-file-name {
+  display:flex;
+  flex:1;
+  min-width:0;
+  align-items:center;
+  gap:8px;
+  padding:8px 9px;
+  text-align:left;
+  color:inherit
+}
+
+.open-file .open-file-label {
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis
+}
+
+.open-file-modified {
+  margin-left:auto;
+  color:var(--accent);
+  font-size:8px;
+  flex-shrink:0
+}
+
+.open-file-close {
+  flex-shrink:0;
+  width:26px;
+  align-self:stretch;
+  color:var(--muted);
+  font-size:15px;
+  opacity:0
+}
+
+.open-file:hover .open-file-close,.open-file:focus-within .open-file-close {
+  opacity:1
+}
+
+.open-file-close:hover {
+  color:var(--text)
+}
+
 .file-icon {
   color:var(--muted);
   font-size:14px;

@@ -19,6 +19,7 @@
   let editRevision = 0;
   let needsSerialization = false;
   let folder = null;
+  let openFiles = [];
   let toastTimer;
   let refreshTimer;
   let activeMatch = -1;
@@ -211,6 +212,24 @@
     }
     if (!add(folder.children, tree)) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = query ? 'No matching files.' : 'No Markdown files in this folder.'; tree.append(empty); }
   }
+  function renderOpenFiles() {
+    const list = $('#open-files'); list.replaceChildren();
+    $('#open-files-section').hidden = !openFiles.length;
+    for (const file of openFiles) {
+      const row = document.createElement('div'); row.className = `file-row open-file${file.current ? ' active' : ''}`;
+      const select = document.createElement('button'); select.className = 'open-file-name'; select.title = file.path || file.name;
+      if (file.current) select.setAttribute('aria-current', 'page');
+      const icon = document.createElement('span'); icon.className = 'file-icon'; icon.textContent = '≡';
+      const name = document.createElement('span'); name.className = 'open-file-label'; name.textContent = file.name;
+      select.append(icon, name);
+      if (file.modified) { const dot = document.createElement('span'); dot.className = 'open-file-modified'; dot.textContent = '●'; dot.title = 'Unsaved changes'; select.append(dot); }
+      select.onclick = () => post('selectOpenFile', { id: file.id });
+      const close = document.createElement('button'); close.className = 'open-file-close'; close.textContent = '×';
+      close.title = `Close ${file.name}`; close.setAttribute('aria-label', `Close ${file.name}`);
+      close.onclick = () => post('closeOpenFile', { id: file.id });
+      row.append(select, close); list.append(row);
+    }
+  }
   function toggleFocus() {
     const on = document.body.classList.toggle('focus-mode');
     $('#focus-button').setAttribute('aria-pressed', String(on));
@@ -308,6 +327,7 @@
     else if (name === 'metadata') updateMetadata(value);
     else if (name === 'saved') { $('#modified-dot').hidden = true; $('#save-status').textContent = 'Saved locally'; }
     else if (name === 'folder') { folder = value; renderFiles(); }
+    else if (name === 'openFiles') { openFiles = Array.isArray(value) ? value : []; renderOpenFiles(); }
     else if (name === 'format') format(value);
   }
   document.addEventListener('click', event => {

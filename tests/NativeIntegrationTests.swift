@@ -33,6 +33,25 @@ final class OpenRequestController: DocumentController {
     }
 }
 
+final class FakeDrop: NSObject, NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingDestinationWindow: NSWindow?
+    init(pasteboard: NSPasteboard, window: NSWindow) { draggingPasteboard = pasteboard; draggingDestinationWindow = window }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingLocation: NSPoint { NSPoint(x: 400, y: 300) }
+    var draggedImageLocation: NSPoint { draggingLocation }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+    func resetSpringLoading() {}
+}
+
 @main struct NativeIntegrationTests {
     static func main() throws {
         setbuf(stdout, nil)
@@ -238,6 +257,45 @@ final class OpenRequestController: DocumentController {
             try waitUntil { poll(); return bodyTheme == "dark" }
             settings.appearance = .light; themed.applySettings()
             try waitUntil { poll(); return bodyTheme == "light" }
+        }
+        test("Documents open as tabs, list their tab group, and accept Markdown drops") {
+            let opened = { (url: URL) in controller.documents.first { $0.fileURL == url } as? MarkdownDocument }
+            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            for doc in [a, b] { doc.recoveryStore = recoveryStore; controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows() }
+            defer { for doc in controller.documents { doc.close() } }
+            guard let editorA = a.editorController, let editorB = b.editorController, let windowA = editorA.window else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { windowA.tabbedWindows?.count == 2 }
+            try expect(editorA.tabDocuments.map(\.recoveryID) == editorB.tabDocuments.map(\.recoveryID), "Tabs disagree about their group")
+            try waitUntil { editorB.canSynchronize && editorA.canSynchronize }
+            var listed = -1
+            func pollListed(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("document.querySelectorAll('#open-files .open-file').length") { result, _ in listed = result as? Int ?? -1 } }
+            try waitUntil { pollListed(editorB); return listed == 2 }
+
+            editorA.appDelegate.openFiles([first], asTabsIn: windowA)
+            try waitUntil { opened(first)?.editorController?.window.map { windowA.tabbedWindows?.contains($0) == true } == true }
+            let count = controller.documents.count
+            editorA.appDelegate.openFiles([first], asTabsIn: windowA)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            try expect(controller.documents.count == count && windowA.tabbedWindows?.count == 3, "Reopening an open file added a tab")
+            try waitUntil { pollListed(editorA); return listed == 3 }
+
+            let image = root.appendingPathComponent("picture.png")
+            let pasteboard = NSPasteboard(name: NSPasteboard.Name("margin-drop-\(UUID().uuidString)"))
+            defer { pasteboard.releaseGlobally() }
+            pasteboard.clearContents(); pasteboard.writeObjects([image as NSURL])
+            try expect(EditorWebView.markdownFiles(on: pasteboard).isEmpty, "Image drops were taken from the editor")
+            pasteboard.clearContents(); pasteboard.writeObjects([second as NSURL])
+            let drop = FakeDrop(pasteboard: pasteboard, window: windowA)
+            try expect(editorA.webView.draggingEntered(drop) == .copy, "Markdown drop not accepted")
+            try expect(editorA.webView.prepareForDragOperation(drop) && editorA.webView.performDragOperation(drop), "Markdown drop not performed")
+            try waitUntil { opened(second)?.editorController?.window.map { windowA.tabbedWindows?.contains($0) == true } == true }
+
+            guard let firstDoc = opened(first) else { throw CocoaError(.fileReadUnknown) }
+            editorA.closeTab(id: firstDoc.recoveryID.uuidString)
+            try waitUntil { opened(first) == nil }
+            try waitUntil { windowA.tabbedWindows?.count == 3 }
+            try waitUntil { pollListed(editorA); return listed == 3 }
         }
         test("Launch without a file registers and shows an editor window") {
             delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
