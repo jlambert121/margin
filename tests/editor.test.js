@@ -7,7 +7,7 @@
   const fixture = '# A real document\n\nA paragraph with **bold**, *emphasis*, and [a link](https://example.com).\n\n## Next steps\n\n- [x] Finished\n- [ ] Pending\n\n```swift\nlet value = 42\n```\n\n| Name | Value |\n| --- | --- |\n| Answer | 42 |\n\n![Local image](images/example.png)\n';
   await test('Loads headings, marks, tasks, code, tables, and relative images', async () => {
     app.load({ text: fixture, name: 'Example.md', path: '/tmp/Example.md' }); await tick();
-    const content = document.querySelector('.toastui-editor-ww-container');
+    const content = app.editor.getEditorElements().wwEditor;
     assert(content.querySelector('h1').textContent === 'A real document', 'Heading not rendered');
     assert(content.querySelector('strong').textContent === 'bold', 'Bold not rendered');
     assert(content.querySelector('em'), 'Emphasis missing');
@@ -30,7 +30,7 @@
     const textarea = document.querySelector('#source-editor');
     textarea.value = '# Source edit\n\nA new paragraph.\n'; textarea.dispatchEvent(new Event('input', { bubbles: true }));
     app.command('source'); await tick();
-    assert(document.querySelector('.toastui-editor-ww-container h1').textContent === 'Source edit', 'Source changes not rendered');
+    assert(app.editor.getEditorElements().wwEditor.querySelector('h1').textContent === 'Source edit', 'Source changes not rendered');
     assert(app.getMarkdown().includes('A new paragraph.'), 'Source changes lost');
   });
   await test('Rich editing serializes back to Markdown', async () => {
@@ -80,11 +80,10 @@
     assert(document.querySelector('#find-result').textContent === '2 of 2', 'Next result failed');
     document.querySelector('#find-close').click();
   });
-  await test('Theme, focus, and typewriter controls work', async () => {
-    app.command('theme', 'dark'); assert(document.body.dataset.theme === 'dark', 'Dark theme not applied');
+  await test('Focus and typewriter controls work', async () => {
     app.command('focus'); assert(document.body.classList.contains('focus-mode'), 'Focus mode not applied');
     app.command('focus'); app.command('typewriter'); assert(document.body.classList.contains('typewriter'), 'Typewriter mode not applied');
-    app.command('typewriter'); app.command('theme', 'light');
+    app.command('typewriter');
   });
   await test('Document HTML cannot execute scripts', async () => {
     app.load({ text: '# Safety\n\n<script>window.__unsafe = true</script>\n\n<img src="x" onerror="window.__unsafe=true">\n' }); await tick();

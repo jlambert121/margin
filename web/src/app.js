@@ -25,18 +25,36 @@
   let activeMatch = -1;
   let matches = [];
   let insertKind = 'link';
-  const editor = new toastui.Editor({
-    el: $('#editor'), height: '100%', initialEditType: 'wysiwyg', initialValue: raw,
-    hideModeSwitch: true, usageStatistics: false, toolbarItems: [], autofocus: false,
-    customHTMLSanitizer: html => DOMPurify.sanitize(html),
-    placeholder: 'Begin anywhere…',
-    hooks: { addImageBlobHook(blob, callback) {
-      const reader = new FileReader();
-      reader.onload = () => callback(reader.result, blob.name || 'Image');
-      reader.readAsDataURL(blob);
-      return false;
-    } },
-  });
+  // In the app, WebKit matches this to the window's appearance, which follows Settings.
+  const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)');
+  let editor;
+  let editable;
+  // Toast UI takes its theme only at construction, and adds the theme class to
+  // its element without removing it, so each build gets a fresh element.
+  function createEditor(initialValue) {
+    const dark = systemAppearance.matches;
+    document.body.dataset.theme = dark ? 'dark' : 'light';
+    const el = document.createElement('div'); el.id = 'editor'; el.hidden = sourceMode;
+    $('#editor').replaceWith(el);
+    editor = new toastui.Editor({
+      el, height: '100%', initialEditType: 'wysiwyg', initialValue, theme: dark ? 'dark' : 'light',
+      hideModeSwitch: true, usageStatistics: false, toolbarItems: [], autofocus: false,
+      customHTMLSanitizer: html => DOMPurify.sanitize(html),
+      placeholder: 'Begin anywhere…',
+      hooks: { addImageBlobHook(blob, callback) {
+        const reader = new FileReader();
+        reader.onload = () => callback(reader.result, blob.name || 'Image');
+        reader.readAsDataURL(blob);
+        return false;
+      } },
+    });
+    editable = editor.getEditorElements().wwEditor.querySelector('.ProseMirror');
+    editable.setAttribute('aria-label', 'Markdown document');
+    editable.setAttribute('role', 'textbox');
+    editable.setAttribute('aria-multiline', 'true');
+    editor.on('change', editorChanged);
+  }
+  createEditor(raw);
   const source = document.createElement('textarea');
   source.id = 'source-editor';
   source.setAttribute('aria-label', 'Markdown source');
@@ -46,10 +64,6 @@
   const sourceStyle = document.createElement('style');
   sourceStyle.textContent = '#source-editor{flex:1;min-height:0;resize:none;border:0;outline:0;display:block;width:100%;background:var(--paper);color:var(--text);font:14px/1.85 ui-monospace,SFMono-Regular,Menlo,monospace;padding:48px max(40px,calc((100% - 680px)/2)) 35vh;tab-size:2;white-space:pre-wrap}';
   document.head.append(sourceStyle);
-  const editable = $('.toastui-editor-ww-container .ProseMirror');
-  editable.setAttribute('aria-label', 'Markdown document');
-  editable.setAttribute('role', 'textbox');
-  editable.setAttribute('aria-multiline', 'true');
 
   function toast(message) {
     clearTimeout(toastTimer);
@@ -65,7 +79,7 @@
     $('#save-status').textContent = 'Edited';
     refresh();
   }
-  editor.on('change', () => {
+  function editorChanged() {
     if (!programmatic && !sourceMode) {
       const retry = needsSerialization;
       needsSerialization = true;
@@ -75,7 +89,7 @@
         changed(next, retry);
       } catch { post('editorSerializationError', { token: documentToken }); }
     }
-  });
+  }
   source.addEventListener('input', () => changed(source.value));
   source.addEventListener('keydown', event => {
     if (event.key === 'Tab') {
@@ -112,6 +126,7 @@
     $('#save-status').textContent = data.modified ? 'Edited' : currentPath ? 'Saved locally' : 'Ready to write';
     if (data.folder) { folder = data.folder; renderFiles(); }
     else if (folder) renderFiles();
+    if (Array.isArray(data.openFiles)) { openFiles = data.openFiles; renderOpenFiles(); }
     refresh();
     documentToken = data.token ?? null;
     editRevision = 0;
@@ -252,19 +267,23 @@
   function openMenu(id, trigger) {
     const wasHidden = $(id).hidden; closeMenus(); $(id).hidden = !wasHidden; $(trigger).setAttribute('aria-expanded', String(wasHidden));
   }
-  const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)');
-  let selectedTheme = 'auto';
-  function applyTheme() {
-    const dark = selectedTheme === 'dark' || (selectedTheme === 'auto' && systemAppearance.matches);
-    document.body.dataset.theme = dark ? 'dark' : 'light';
-    $('.toastui-editor-defaultUI').classList.toggle('toastui-editor-dark', dark);
+  // Rebuilding drops the editor's own history, which is unused: undo is native.
+  function rebuildEditorForTheme() {
+    try { snapshot(); }
+    catch { toast('The theme will change once the latest edit can be read.'); return; }
+    const hadFocus = editable.contains(document.activeElement);
+    const selection = editor.getSelection();
+    const scrollTop = editor.getScrollTop();
+    editor.destroy();
+    programmatic = true;
+    try { createEditor(raw); }
+    finally { programmatic = false; }
+    try { editor.setSelection(...selection); } catch {}
+    editor.setScrollTop(scrollTop);
+    if (hadFocus) editor.focus();
+    refresh();
   }
-  systemAppearance.addEventListener('change', applyTheme);
-  // The native app owns the appearance setting and sends it after each load.
-  function theme(name) {
-    selectedTheme = ['light', 'dark', 'auto'].includes(name) ? name : 'auto';
-    applyTheme();
-  }
+  systemAppearance.addEventListener('change', rebuildEditorForTheme);
   function insertDialog(kind) {
     insertKind = kind;
     $('#insert-title').textContent = kind === 'image' ? 'Insert image' : 'Insert link';
@@ -318,7 +337,6 @@
     else if (name === 'outline') { document.body.classList.remove('no-sidebar'); showTab('outline'); }
     else if (name === 'focus') toggleFocus();
     else if (name === 'find') showFind();
-    else if (name === 'theme') theme(value);
     else if (name === 'typewriter') { const on = document.body.classList.toggle('typewriter'); $('#typewriter-check').textContent = on ? '✓' : ''; closeMenus(); }
     else if (name === 'exportHTML') {
       if (sourceMode) setRich(raw);
@@ -338,8 +356,8 @@
     }
     const formatButton = event.target.closest('[data-format]'); if (formatButton) format(formatButton.dataset.format);
     if (!event.target.closest('.popover,#format-button,#more-button')) closeMenus();
-    const link = event.target.closest('.toastui-editor-contents a');
-    if (link) {
+    const link = event.target.closest('a');
+    if (link && editable.contains(link)) {
       event.preventDefault();
       if (event.metaKey || event.ctrlKey) {
         const href = link.getAttribute('href');
@@ -348,6 +366,18 @@
       }
     }
   });
+  // The native document owns undo. Inside the document, the rich editor's and the
+  // textarea's own histories would bypass it, and ProseMirror's history even
+  // includes the document load, so one undo could empty a just-opened file.
+  document.addEventListener('keydown', event => {
+    if (!native || !(event.metaKey || event.ctrlKey) || event.altKey) return;
+    if (!(editable.contains(event.target) || event.target === source)) return;
+    const key = event.key.toLowerCase();
+    const redo = (key === 'z' && event.shiftKey) || (key === 'y' && !event.shiftKey);
+    if (key !== 'z' && !redo) return;
+    event.preventDefault(); event.stopPropagation();
+    post(redo ? 'redo' : 'undo');
+  }, true);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') { closeMenus(); $('#find-bar').hidden = true; }
     if (!(event.metaKey || event.ctrlKey)) return;
@@ -382,13 +412,12 @@
     }
     return { text: raw, token: documentToken, revision: editRevision };
   }
-  window.app = { load: loadDocument, command, getMarkdown: () => raw, snapshot, getHTML: () => editor.getHTML(), editor, isSource: () => sourceMode, welcome };
+  window.app = { load: loadDocument, command, getMarkdown: () => raw, snapshot, getHTML: () => editor.getHTML(), get editor() { return editor; }, isSource: () => sourceMode, welcome };
   // Resolves local images through the restricted native asset handler, while keeping
   // the Markdown URLs themselves relative and portable.
   if (native) {
     const base = document.createElement('base'); base.href = 'markdown-asset://local/'; document.head.append(base);
   }
-  applyTheme();
   renderFiles(); refresh();
   if (native) post('ready');
 })();

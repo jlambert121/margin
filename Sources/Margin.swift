@@ -7,6 +7,11 @@ let markdownType = "net.daringfireball.markdown"
 let plainTextType = "public.plain-text"
 let markdownExtensions = Set(["md", "markdown", "mdown", "mkd", "txt"])
 
+extension Notification.Name {
+    // Posted when a document's name, path, or unsaved state, or a window's tabs, change.
+    static let openFilesChanged = Notification.Name("Margin.openFilesChanged")
+}
+
 // Info.plist uses this Objective-C name. An unqualified Swift class name does
 // not resolve through NSClassFromString, so AppKit otherwise disables Open.
 @objc(MarkdownDocument)
@@ -26,15 +31,15 @@ final class MarkdownDocument: NSDocument {
     private var recoveryErrorReported = false
     var editorName: String { fileURL?.lastPathComponent ?? recoveredName ?? "Untitled.md" }
     override class var autosavesInPlace: Bool { true }
-    override var fileURL: URL? { didSet { (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh() } }
+    override var fileURL: URL? { didSet { NotificationCenter.default.post(name: .openFilesChanged, object: self) } }
     override func updateChangeCount(_ change: NSDocument.ChangeType) {
         super.updateChangeCount(change)
         if change == .changeDone, uncountedEdit { uncountedEdit = false; runSavesWaitingForEdit() }
-        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+        NotificationCenter.default.post(name: .openFilesChanged, object: self)
     }
     override func updateChangeCount(withToken changeCountToken: Any, for saveOperation: NSDocument.SaveOperationType) {
         super.updateChangeCount(withToken: changeCountToken, for: saveOperation)
-        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+        NotificationCenter.default.post(name: .openFilesChanged, object: self)
     }
 
     override func makeWindowControllers() {
@@ -254,6 +259,15 @@ final class MessageBridge: NSObject, WKScriptMessageHandler {
 // images, still goes to WebKit for the editor's own drop handling.
 final class EditorWebView: WKWebView {
     var onOpenFiles: (([URL]) -> Void)?
+    // WebKit registers its own editing undo on the responder chain's undo
+    // manager, which is otherwise the document's. The document's undo works
+    // on whole Markdown snapshots, so WebKit's steps must stay out of it.
+    private let editingUndoManager: UndoManager = {
+        let manager = UndoManager()
+        manager.levelsOfUndo = 1
+        return manager
+    }()
+    override var undoManager: UndoManager? { editingUndoManager }
     private var handlingFileDrop = false
     static func markdownFiles(on pasteboard: NSPasteboard) -> [URL] {
         let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
@@ -297,8 +311,9 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     private let logger = Logger(subsystem: "com.infiniteviewtech.margin", category: "Editor")
     private var tabObservation: NSKeyValueObservation?
     private weak var observedTabGroup: NSWindowTabGroup?
+    private var hasBeenShown = false
     var doc: MarkdownDocument { document as! MarkdownDocument }
-    var appDelegate: AppDelegate { NSApp.delegate as! AppDelegate }
+    private var app: AppDelegate? { (NSDocumentController.shared as? DocumentController)?.app }
 
     init(document: MarkdownDocument) {
         let configuration = WKWebViewConfiguration()
@@ -321,7 +336,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         windowFrameAutosaveName = "MarginEditor"
         webView.onOpenFiles = { [weak self] urls in
             guard let self, let window = self.window else { return }
-            self.appDelegate.openFiles(urls, asTabsIn: window)
+            self.app?.open(urls, asTabsIn: window)
         }
         // NSDocument.addWindowController must attach us. Setting document here
         // makes AppKit treat that later call as redundant, so the document's
@@ -454,7 +469,8 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         armLoadTimeout()
         assets.root = (doc.fileURL ?? doc.recoveredOriginalURL)?.deletingLastPathComponent()
         var payload: [String: Any] = ["text": doc.text, "token": token, "name": doc.editorName, "path": doc.fileURL?.path ?? "", "modified": doc.isDocumentEdited]
-        if let folder = appDelegate.folderPayload() { payload["folder"] = folder }
+        if let folder = app?.folderPayload() { payload["folder"] = folder }
+        payload["openFiles"] = openFilesPayload()
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
             evaluate("window.app.load(\(String(decoding: data, as: UTF8.self)))")
@@ -482,8 +498,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             session.acknowledge(token)
             if session.isLoaded {
                 loadTimeout?.cancel(); loadTimeout = nil; webView.isHidden = false
-                send("theme", appDelegate.settings.appearance.rawValue)
-                sendOpenFiles()
             }
         case "changed":
             if let token = body["token"] as? String, let text = body["text"] as? String,
@@ -500,20 +514,22 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             doc.hasUnserializedEditorChanges = true
             if !doc.isDocumentEdited { doc.updateChangeCount(.changeDone) }
             reportEditorError("The latest edit could not be converted to Markdown. Save will retry reading the editor; if that fails, copy your text before closing the window.")
-        case "new": appDelegate.newDocument(nil)
-        case "open": appDelegate.controller.openDocument(nil)
-        case "openFolder": appDelegate.openFolder(nil)
-        case "refreshFolder": appDelegate.refreshFolders()
+        case "undo": undoDocument(nil)
+        case "redo": redoDocument(nil)
+        case "new": app?.newDocument(nil)
+        case "open": NSDocumentController.shared.openDocument(nil)
+        case "openFolder": app?.openFolder(nil)
+        case "refreshFolder": app?.refreshFolders()
         case "save": doc.save(nil)
         case "saveAs": doc.saveAs(nil)
         case "print": printDocument(nil)
         case "exportHTML": if let html = body["html"] as? String { exportHTML(html) }
         case "openPath":
-            if let path = body["path"] as? String, let folder = appDelegate.workspace {
+            if let path = body["path"] as? String, let folder = app?.workspace {
                 let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
                 let root = folder.standardizedFileURL.resolvingSymlinksInPath()
                 guard url.path.hasPrefix(root.path + "/"), markdownExtensions.contains(url.pathExtension.lowercased()), let window else { return }
-                appDelegate.openFiles([url], asTabsIn: window)
+                app?.open([url], asTabsIn: window)
             }
         case "selectOpenFile": selectTab(id: body["id"] as? String)
         case "closeOpenFile": closeTab(id: body["id"] as? String)
@@ -528,16 +544,21 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     // shown gives it a group of its own and stops it joining the current tabs.
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
+        hasBeenShown = true
         observeTabGroup()
+        NotificationCenter.default.post(name: .openFilesChanged, object: self)
     }
     private func observeTabGroup() {
-        guard window?.isVisible == true, let group = window?.tabGroup, group !== observedTabGroup else { return }
+        guard hasBeenShown, let group = window?.tabGroup, group !== observedTabGroup else { return }
         observedTabGroup = group
-        tabObservation = group.observe(\.windows) { [weak self] _, _ in self?.appDelegate.scheduleOpenFilesRefresh() }
+        tabObservation = group.observe(\.windows) { [weak self] _, _ in
+            NotificationCenter.default.post(name: .openFilesChanged, object: self)
+        }
     }
     var tabDocuments: [MarkdownDocument] {
         guard let window else { return [] }
-        let open = appDelegate.controller.documents
+        guard hasBeenShown else { return [doc] }
+        let open = NSDocumentController.shared.documents
         // tabbedWindows is nil whenever the tab bar is hidden; the group is not.
         return (window.tabGroup?.windows ?? [window]).compactMap { $0.windowController?.document as? MarkdownDocument }.filter { doc in open.contains { $0 === doc } }
     }
@@ -551,11 +572,14 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         if (tab.windowController?.document as? NSDocument)?.isDocumentEdited == true { tab.makeKeyAndOrderFront(nil) }
         tab.performClose(nil)
     }
+    private func openFilesPayload() -> [[String: Any]] {
+        tabDocuments.map { tab in
+            ["id": tab.recoveryID.uuidString, "name": tab.editorName, "path": tab.fileURL?.path ?? "", "modified": tab.isDocumentEdited, "current": tab === document]
+        }
+    }
     func sendOpenFiles() {
         observeTabGroup()
-        send("openFiles", tabDocuments.map { tab in
-            ["id": tab.recoveryID.uuidString, "name": tab.editorName, "path": tab.fileURL?.path ?? "", "modified": tab.isDocumentEdited, "current": tab === document] as [String: Any]
-        })
+        send("openFiles", openFilesPayload())
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated {
@@ -607,15 +631,16 @@ class DocumentController: NSDocumentController {
         [markdownType, plainTextType].contains(typeName) ? MarkdownDocument.self : nil
     }
     override var defaultType: String? { markdownType }
-    weak var startup: AppDelegate?
+    weak var app: AppDelegate?
     private var queuedOpens: [(url: URL, display: Bool, completion: (NSDocument?, Bool, Error?) -> Void)] = []
     private var opening = false
-    // Launch-time Finder opens arrive here before didFinishLaunching, without
-    // going through application(_:open:), so the welcome check counts them here.
-    // Opens run one at a time: concurrent reads finish in any order, and each
-    // window becomes a tab as it is shown, so tabs would not follow the request.
+    var isOpening: Bool { opening || !queuedOpens.isEmpty }
+    // Every open, including Finder's launch-time ones (requested before
+    // didFinishLaunching), comes through here. They run one at a time:
+    // concurrent reads finish in any order, and each window becomes a tab as
+    // it is shown, so tabs would not follow the order requested.
     override func openDocument(withContentsOf url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
-        queuedOpens.append((url, displayDocument, startup?.trackOpen(completionHandler) ?? completionHandler))
+        queuedOpens.append((url, displayDocument, completionHandler))
         openNextQueuedDocument()
     }
     private func openNextQueuedDocument() {
@@ -624,8 +649,9 @@ class DocumentController: NSDocumentController {
         let next = queuedOpens.removeFirst()
         performOpen(next.url, display: next.display) { [weak self] document, alreadyOpen, error in
             next.completion(document, alreadyOpen, error)
-            self?.opening = false
-            self?.openNextQueuedDocument()
+            guard let self else { return }
+            self.opening = false
+            if self.queuedOpens.isEmpty { self.app?.documentOpensFinished() } else { self.openNextQueuedDocument() }
         }
     }
     func performOpen(_ url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
@@ -633,11 +659,11 @@ class DocumentController: NSDocumentController {
     }
     override func addDocument(_ document: NSDocument) {
         super.addDocument(document)
-        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+        NotificationCenter.default.post(name: .openFilesChanged, object: document)
     }
     override func removeDocument(_ document: NSDocument) {
         super.removeDocument(document)
-        (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
+        NotificationCenter.default.post(name: .openFilesChanged, object: document)
     }
     override func typeForContents(of url: URL) throws -> String {
         guard url.isFileURL, markdownExtensions.contains(url.pathExtension.lowercased()) else {
@@ -655,7 +681,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let settings: Settings
     private var settingsWindow: SettingsWindowController?
     private var openFilesRefreshScheduled = false
-    private var pendingFileOpens = 0
     private var launchFinished = false
     private var restorationFinished = false
     private var startupCompleted = false
@@ -666,11 +691,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.recoveryStore = recoveryStore
         self.settings = settings
         super.init()
-        controller?.startup = self
+        controller?.app = self
+        NotificationCenter.default.addObserver(self, selector: #selector(openFilesChanged(_:)), name: .openFilesChanged, object: nil)
     }
     func applicationWillFinishLaunching(_ notification: Notification) {
         if controller == nil { controller = DocumentController() }
-        controller.startup = self
+        controller.app = self
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidFinishRestoringWindows(_:)), name: NSApplication.didFinishRestoringWindowsNotification, object: NSApp)
         buildMenu()
         applySettings()
@@ -678,7 +704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         launchFinished = true
-        NSApp?.activate(ignoringOtherApps: true)
+        if #available(macOS 14, *) { NSApp?.activate() } else { NSApp?.activate(ignoringOtherApps: true) }
         finishStartupIfReady()
     }
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
@@ -689,7 +715,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func finishStartupIfReady() {
         // Restoration can finish after didFinishLaunching. Wait for both it
         // and launch-time file opens before deciding whether a welcome is needed.
-        guard launchFinished, restorationFinished, pendingFileOpens == 0, !startupCompleted else { return }
+        guard launchFinished, restorationFinished, !controller.isOpening, !startupCompleted else { return }
         startupCompleted = true
         do {
             let failures = try recoverDocuments()
@@ -746,30 +772,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    // Associated document types normally go through NSDocumentController.
-    // This also handles URL events forwarded directly by Finder or the Dock.
-    func application(_ application: NSApplication, open urls: [URL]) {
-        openFiles(urls)
-    }
-    func openFiles(_ urls: [URL]) {
-        for url in urls {
-            controller.openDocument(withContentsOf: url, display: true) { [weak self] _, _, error in
-                if let error { self?.controller.presentError(error) }
-            }
-        }
-    }
-    func trackOpen(_ completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) -> (NSDocument?, Bool, Error?) -> Void {
-        pendingFileOpens += 1
-        return { [weak self] document, alreadyOpen, error in
-            completionHandler(document, alreadyOpen, error)
-            guard let self else { return }
-            self.pendingFileOpens -= 1
-            self.finishStartupIfReady()
-        }
-    }
-    // Editor windows prefer tabs, so ordinary opens join the frontmost window.
-    // Drops and workspace clicks name their window, which may not be frontmost.
-    func openFiles(_ urls: [URL], asTabsIn window: NSWindow) {
+    func documentOpensFinished() { finishStartupIfReady() }
+    // Finder, Dock, and File > Open go straight to the document controller, and
+    // editor windows prefer tabs, so those join the frontmost window. Drops and
+    // workspace clicks name their window, which may not be frontmost.
+    func open(_ urls: [URL], asTabsIn window: NSWindow) {
         for url in urls {
             controller.openDocument(withContentsOf: url, display: false) { [weak self] document, alreadyOpen, error in
                 if let error { self?.controller.presentError(error); return }
@@ -782,6 +789,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
     }
+    @objc private func openFilesChanged(_ notification: Notification) { scheduleOpenFilesRefresh() }
     func scheduleOpenFilesRefresh() {
         guard !openFilesRefreshScheduled else { return }
         openFilesRefreshScheduled = true
@@ -852,7 +860,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applySettings() {
         NSApp?.appearance = settings.appearance.appearance
         NSApp?.applicationIconImage = settings.appIcon.dockImage
-        for doc in controller.documents { (doc as? MarkdownDocument)?.editorController?.send("theme", settings.appearance.rawValue) }
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()

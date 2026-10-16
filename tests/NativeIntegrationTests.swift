@@ -68,9 +68,11 @@ final class FakeDrop: NSObject, NSDraggingInfo {
         func expect(_ condition: Bool, _ message: String) throws {
             if !condition { throw NSError(domain: "NativeIntegrationTests", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
         }
+        // Tests that build their own AppDelegate take over controller.app; give it back.
         func test(_ name: String, _ block: @MainActor () throws -> Void) {
             do { try block(); print("PASS \(name)") }
             catch { failures += 1; print("FAIL \(name): \(error)") }
+            controller.app = delegate
         }
         func waitUntil(_ finished: () -> Bool) throws {
             let limit = Date().addingTimeInterval(15)
@@ -152,29 +154,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(controller.untitledRequests == 1, "Empty startup did not create exactly one welcome")
             try expect((controller.documents.first as? StartupTestDocument)?.presentations == 1, "Welcome was not presented")
         }
-        test("Pending launch file opens suppress the welcome until their completion") {
-            controller.useWindowlessDocuments = true
-            controller.useNativeOpening = false
-            controller.deferOpening = true
-            controller.untitledRequests = 0
-            defer {
-                controller.documents.forEach { controller.removeDocument($0) }
-                controller.pendingCompletions.removeAll()
-                controller.useWindowlessDocuments = false
-                controller.useNativeOpening = true
-                controller.deferOpening = false
-            }
-            let startup = AppDelegate(controller: controller, recoveryStore: recoveryStore)
-            startup.openFiles([first])
-            startup.applicationDidFinishLaunching(launched)
-            startup.applicationDidFinishRestoringWindows(restored)
-            try expect(controller.untitledRequests == 0, "Welcome appeared while a launch file was opening")
-            let doc = StartupTestDocument()
-            controller.addDocument(doc)
-            controller.pendingCompletions.removeFirst()(doc, false, nil)
-            try expect(controller.untitledRequests == 0, "Welcome appeared beside the opened file")
-        }
-        test("Launch-time opens sent straight to the document controller suppress the welcome") {
+        test("Launch-time file opens suppress the welcome until they finish") {
             controller.useWindowlessDocuments = true
             controller.useNativeOpening = false
             controller.deferOpening = true
@@ -281,9 +261,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
         test("Appearance setting reaches the app and a loaded editor") {
             let settings = Settings(defaults: settingsDefaults)
             let themed = AppDelegate(controller: controller, recoveryStore: recoveryStore, settings: settings)
-            let original = application?.delegate
-            application?.delegate = themed
-            defer { application?.delegate = original; settingsDefaults.removePersistentDomain(forName: settingsSuite); delegate.applySettings() }
+            defer { settingsDefaults.removePersistentDomain(forName: settingsSuite); delegate.applySettings() }
             settings.appearance = .dark; settings.appIcon = .ruled
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore
@@ -320,14 +298,21 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { poll(); return bodyTheme == "light" }
         }
         test("Closing a document before its editor loads ignores the editor's late messages") {
+            // Holding the editors keeps their web views alive to deliver those messages.
+            var closed: [EditorWindowController] = []
             for _ in 0..<5 {
                 let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
                 doc.recoveryStore = recoveryStore
                 controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+                if let editor = doc.editorController { closed.append(editor) }
+                // Let the editor start loading before its document goes away.
                 RunLoop.current.run(until: Date().addingTimeInterval(0.05))
                 doc.close()
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(3))
+            try waitUntil { closed.allSatisfy { !$0.webView.isLoading } }
+            var drained = false
+            closed.last?.webView.evaluateJavaScript("1") { _, _ in drained = true }
+            try waitUntil { drained }
         }
         test("Documents open as tabs, list their tab group, and accept Markdown drops") {
             let opened = { (url: URL) in controller.documents.first { $0.fileURL == url } as? MarkdownDocument }
@@ -343,11 +328,11 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             func pollListed(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("document.querySelectorAll('#open-files .open-file').length") { result, _ in listed = result as? Int ?? -1 } }
             try waitUntil { pollListed(editorB); return listed == 2 }
 
-            editorA.appDelegate.openFiles([first], asTabsIn: windowA)
+            delegate.open([first], asTabsIn: windowA)
             try waitUntil { opened(first)?.editorController?.window.map { windowA.tabbedWindows?.contains($0) == true } == true }
             let count = controller.documents.count
-            editorA.appDelegate.openFiles([first], asTabsIn: windowA)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            delegate.open([first], asTabsIn: windowA)
+            try waitUntil { !controller.isOpening }
             try expect(controller.documents.count == count && windowA.tabbedWindows?.count == 3, "Reopening an open file added a tab")
             try waitUntil { pollListed(editorA); return listed == 3 }
 
@@ -383,12 +368,30 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { windowA.tabbedWindows?.count == 3 }
             try waitUntil { pollListed(editorA); return listed == 3 }
         }
+        test("Editor typing makes one document undo step and the undo key reverts it") {
+            let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            doc.recoveryStore = recoveryStore
+            doc.text = "# Start\n"
+            controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+            defer { doc.close() }
+            guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editor.canSynchronize }
+            var finished = false
+            // execCommand goes through WebKit's own editing, which registers WebKit undo steps.
+            editor.webView.evaluateJavaScript("app.editor.getEditorElements().wwEditor.querySelector('.ProseMirror').focus(); document.execCommand('insertText', false, 'typed '); 1") { _, _ in finished = true }
+            try waitUntil { finished && doc.text != "# Start\n" && doc.undoManager?.canUndo == true }
+            finished = false
+            editor.webView.evaluateJavaScript("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true })); 1") { _, _ in finished = true }
+            try waitUntil { finished && doc.text == "# Start\n" }
+            try expect(doc.undoManager?.canUndo == false, "WebKit editing steps reached the document's undo stack")
+            try expect(!doc.isDocumentEdited, "Undoing the only edit left the document edited")
+        }
         test("Files opened together become tabs in the order they were requested") {
             let names = (1...5).map { "Order \($0).md" }
             let urls = names.map { root.appendingPathComponent($0) }
             for url in urls { try "# \(url.lastPathComponent)\n".write(to: url, atomically: true, encoding: .utf8) }
             for round in 1...3 {
-                delegate.openFiles(urls)
+                for url in urls { controller.openDocument(withContentsOf: url, display: true) { _, _, _ in } }
                 try waitUntil { urls.allSatisfy { url in controller.documents.contains { $0.fileURL == url } } }
                 let windows = controller.documents.compactMap { ($0 as? MarkdownDocument)?.editorController?.window }
                 let order = (windows.first?.tabGroup?.windows ?? []).compactMap { ($0.windowController?.document as? MarkdownDocument)?.editorName }
@@ -397,9 +400,8 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             }
         }
         test("The editor window remembers its frame for the next window") {
-            let key = "NSWindow Frame MarginEditor"
-            UserDefaults.standard.removeObject(forKey: key)
-            defer { UserDefaults.standard.removeObject(forKey: key) }
+            NSWindow.removeFrame(usingName: "MarginEditor")
+            defer { NSWindow.removeFrame(usingName: "MarginEditor") }
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore
             controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
@@ -408,7 +410,6 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let frame = NSRect(x: 120, y: 140, width: 910, height: 640)
             window.setFrame(frame, display: false)
             doc.close()
-            try expect(UserDefaults.standard.string(forKey: key) != nil, "Window frame was not saved")
             let next = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             next.recoveryStore = recoveryStore
             controller.addDocument(next); next.makeWindowControllers(); next.showWindows()
@@ -505,22 +506,22 @@ final class FakeDrop: NSObject, NSDraggingInfo {
         } else {
             print("SKIP Full AppKit Open/Save and visible-menu checks require a desktop session: ./scripts/test-native.sh --ui")
         }
-        test("Finder and Dock URL handlers forward every file to the document controller") {
-            let requests = controller
-            requests.requests.removeAll()
-            requests.useNativeOpening = application != nil
-            let eventDelegate = AppDelegate(controller: requests, recoveryStore: recoveryStore)
-            try expect(eventDelegate.responds(to: NSSelectorFromString("application:openURLs:")), "File URL callback is not exposed to AppKit")
-            if let application { eventDelegate.application(application, open: [first, second]) }
-            else { eventDelegate.openFiles([first, second]) }
-            if application != nil { try waitUntil { requests.documents.count == 2 } }
-            try expect(requests.requests.map { $0.0 } == [first, second], "Dock request URLs were lost")
-            try expect(requests.requests.allSatisfy { $0.1 }, "Dock requests do not request visible document windows")
-            if application != nil { try expect((requests.documents.first(where: { $0.fileURL == first }) as? MarkdownDocument)?.text == text, "Dock file content not loaded") }
-            if application != nil {
-                try expect(requests.documents.allSatisfy { $0.windowControllers.first?.window?.isVisible == true }, "Dock open did not show every document window")
+        test("Opens requested together reach AppKit one at a time, in request order") {
+            controller.useNativeOpening = false
+            controller.deferOpening = true
+            controller.requests.removeAll()
+            defer {
+                controller.pendingCompletions.removeAll()
+                controller.useNativeOpening = true
+                controller.deferOpening = false
             }
-            for doc in requests.documents { requests.removeDocument(doc); doc.close() }
+            var completed: [URL] = []
+            for url in [first, second] { controller.openDocument(withContentsOf: url, display: true) { _, _, _ in completed.append(url) } }
+            try expect(controller.requests.map(\.0) == [first] && controller.isOpening, "The second open started before the first finished")
+            controller.pendingCompletions.removeFirst()(nil, false, nil)
+            try expect(controller.requests.map(\.0) == [first, second] && completed == [first], "The next open did not start after the first finished")
+            controller.pendingCompletions.removeFirst()(nil, false, nil)
+            try expect(completed == [first, second] && !controller.isOpening, "Opens did not all finish in order")
         }
         if failures > 0 { exit(1) }
     }

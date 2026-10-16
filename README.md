@@ -56,7 +56,7 @@ For Swift changes, rebuild the app. Web files are copied during every build. Run
 
 ## Verification
 
-The application builds with the installed Swift compiler. The default suite has 38 checks: nine app-bundle/native registration, startup, recovery, and routing checks, thirteen document/filesystem/session checks, and sixteen editor/bridge behavior checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Bridge tests cover initialization errors, unavailable preference storage, load acknowledgements, save snapshots, and failed serialization. The editor checks use a DOM emulator and do not verify layout.
+The application builds with the installed Swift compiler. The default suite has 46 checks: fourteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, thirteen document/filesystem/session checks, and nineteen editor/bridge behavior checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, failed serialization, undo keys reaching native undo, the open-files list, and rebuilding the editor when the color scheme changes. The editor checks use a DOM emulator and do not verify layout.
 
 With Node.js 20.19 or later installed:
 
@@ -67,7 +67,7 @@ npm test
 
 This installs a development-only DOM emulator. Building and running the app do not require Node.js or npm.
 
-For visible windows on launch and file opening, the native Open → edit → Save As → Save → reopen flow, menu validation, and a simulated editor-process failure followed by retry, run this in a normal macOS desktop session:
+For the 24 desktop checks — visible windows on launch and file opening, tabs and the open-files list, Markdown drops, ordered opens, editor undo, appearance and Dock icon, window frames, the native Open → edit → Save As → Save → reopen flow, menu validation, and a simulated editor-process failure followed by retry — run this in a normal macOS desktop session:
 
 ```sh
 npm run test:native

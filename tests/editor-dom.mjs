@@ -21,6 +21,10 @@ try {
 const nativeWindow = new Window({ url: 'http://localhost/' });
 const messages = [];
 nativeWindow.webkit = { messageHandlers: { native: { postMessage: message => messages.push(message) } } };
+const colorScheme = { matches: false, listeners: [], addEventListener(type, listener) { if (type === 'change') this.listeners.push(listener); } };
+const realMatchMedia = nativeWindow.matchMedia.bind(nativeWindow);
+nativeWindow.matchMedia = query => query === '(prefers-color-scheme: dark)' ? colorScheme : realMatchMedia(query);
+const setColorScheme = dark => { colorScheme.matches = dark; colorScheme.listeners.forEach(listener => listener({ matches: dark })); };
 Object.defineProperty(nativeWindow, 'localStorage', { value: {
   getItem() { throw new Error('Storage unavailable'); },
   setItem() { throw new Error('Storage unavailable'); },
@@ -87,6 +91,41 @@ try {
     assert(messages.at(-1).action === 'closeOpenFile' && messages.at(-1).id === 'two', 'Closing a file did not reach native');
     nativeWindow.app.command('openFiles', []);
     assert(doc.querySelector('#open-files-section').hidden, 'Empty open files list still shown');
+  });
+  test('Undo keys in the document go to native undo instead of the editor histories', () => {
+    nativeWindow.app.load({ text: '# Keep me\n', token: 'undo-load' });
+    const doc = nativeWindow.document;
+    const key = (target, init) => {
+      const event = new nativeWindow.KeyboardEvent('keydown', { bubbles: true, cancelable: true, metaKey: true, ...init });
+      target.dispatchEvent(event); return event;
+    };
+    const editable = nativeWindow.app.editor.getEditorElements().wwEditor.querySelector('.ProseMirror');
+    for (const [init, action] of [[{ key: 'z' }, 'undo'], [{ key: 'z', shiftKey: true }, 'redo'], [{ key: 'y' }, 'redo']]) {
+      const event = key(editable, init);
+      assert(event.defaultPrevented && messages.at(-1).action === action, `${JSON.stringify(init)} did not reach native ${action}`);
+    }
+    assert(nativeWindow.app.getMarkdown() === '# Keep me\n', 'The editor changed its own text on undo');
+    nativeWindow.app.command('source');
+    const sourceEvent = key(doc.querySelector('#source-editor'), { key: 'z' });
+    assert(sourceEvent.defaultPrevented && messages.at(-1).action === 'undo', 'Source mode undo did not reach native undo');
+    nativeWindow.app.command('source');
+    const count = messages.length;
+    const findEvent = key(doc.querySelector('#find-input'), { key: 'z' });
+    assert(!findEvent.defaultPrevented && messages.length === count, 'Undo in the find field was taken from the field');
+  });
+  test('A color scheme change rebuilds the editor in that theme and keeps the document', () => {
+    const doc = nativeWindow.document;
+    nativeWindow.app.load({ text: '# Theme\n\nKeep this text.\n', token: 'theme-load' });
+    const before = nativeWindow.app.editor;
+    const count = messages.length;
+    setColorScheme(true);
+    assert(doc.body.dataset.theme === 'dark' && nativeWindow.app.editor !== before, 'Dark scheme did not rebuild the editor');
+    assert(nativeWindow.app.getMarkdown() === '# Theme\n\nKeep this text.\n', 'Rebuild changed the document');
+    assert(nativeWindow.app.editor.getMarkdown().includes('Keep this text.'), 'Rebuilt editor lost the text');
+    assert(!messages.slice(count).some(message => message.action === 'changed'), 'Rebuild reported an edit');
+    assert(doc.querySelectorAll('#editor').length === 1, 'Rebuild left a second editor element');
+    setColorScheme(false);
+    assert(doc.body.dataset.theme === 'light', 'Light scheme not applied');
   });
   test('JavaScript, dependency loading, and promise failures reach native error reporting', () => {
     nativeWindow.dispatchEvent(new nativeWindow.ErrorEvent('error', { message: 'A runtime failure' }));
