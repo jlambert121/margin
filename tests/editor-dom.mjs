@@ -35,7 +35,7 @@ try {
     catch (error) { console.error(`FAIL ${name}: ${error.message}`); process.exitCode = 1; }
   };
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
-  test('Unavailable preference storage does not prevent native editor readiness', () => {
+  test('Unavailable browser storage does not prevent native editor readiness', () => {
     assert(messages.some(message => message.action === 'ready'), 'No ready message after storage failure');
   });
   test('Native loads are acknowledged and edits carry their load token and revision', () => {

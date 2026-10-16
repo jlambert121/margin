@@ -18,14 +18,18 @@ final class MarkdownDocument: NSDocument {
     var recoveredName: String?
     var recoveredOriginalURL: URL?
     var hasUnserializedEditorChanges = false
+    var isWelcome = false
     var onRecoveryError: ((Error) -> Void)?
     private var checkpoint: DispatchWorkItem?
+    private var uncountedEdit = false
+    private var savesWaitingForEdit: [() -> Void] = []
     private var recoveryErrorReported = false
     var editorName: String { fileURL?.lastPathComponent ?? recoveredName ?? "Untitled.md" }
     override class var autosavesInPlace: Bool { true }
     override var fileURL: URL? { didSet { (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh() } }
     override func updateChangeCount(_ change: NSDocument.ChangeType) {
         super.updateChangeCount(change)
+        if change == .changeDone, uncountedEdit { uncountedEdit = false; runSavesWaitingForEdit() }
         (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
     }
     override func updateChangeCount(withToken changeCountToken: Any, for saveOperation: NSDocument.SaveOperationType) {
@@ -49,6 +53,7 @@ final class MarkdownDocument: NSDocument {
         coder.encode(recoveryID.uuidString, forKey: "Margin.recoveryID")
         coder.encode(recoveredName, forKey: "Margin.recoveredName")
         coder.encode(recoveredOriginalURL?.path, forKey: "Margin.recoveredOriginalPath")
+        coder.encode(isWelcome, forKey: "Margin.isWelcome")
     }
     override func restoreState(with coder: NSCoder) {
         super.restoreState(with: coder)
@@ -61,6 +66,10 @@ final class MarkdownDocument: NSDocument {
         if coder.containsValue(forKey: "Margin.recoveredOriginalPath"),
            let path = coder.decodeObject(of: NSString.self, forKey: "Margin.recoveredOriginalPath") as String? {
             recoveredOriginalURL = URL(fileURLWithPath: path)
+        }
+        // A clean welcome has no autosaved contents, so restoration recreates it empty.
+        if coder.decodeBool(forKey: "Margin.isWelcome"), text.isEmpty, !isDocumentEdited, let welcome = Self.welcomeText() {
+            isWelcome = true; text = welcome
         }
         editorController?.loadDocument()
     }
@@ -94,9 +103,13 @@ final class MarkdownDocument: NSDocument {
             editorController?.loadMetadata()
         }
     }
+    static func welcomeText() -> String? {
+        Bundle.main.url(forResource: "Welcome", withExtension: "md").flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+    }
     func edited(_ next: String) {
         hasUnserializedEditorChanges = false
         guard next != text else { return }
+        isWelcome = false
         let previous = text
         let manager = undoManager
         manager?.registerUndo(withTarget: self) { doc in doc.restore(previous) }
@@ -104,7 +117,7 @@ final class MarkdownDocument: NSDocument {
         text = next
         // NSDocument tracks undo groups itself. Explicitly incrementing as
         // well counts every edit twice and prevents Undo from clearing dirty.
-        if manager == nil { updateChangeCount(.changeDone) }
+        if manager == nil { updateChangeCount(.changeDone) } else { uncountedEdit = true }
         scheduleRecovery()
     }
     private func restore(_ next: String) {
@@ -154,6 +167,32 @@ final class MarkdownDocument: NSDocument {
         // process crash never reaches here, so its recovery copy remains.
         clearRecovery()
         super.close()
+    }
+    // NSDocument counts an undo-registered edit with updateChangeCount(.changeDone)
+    // when the edit's undo group closes, possibly later still while it checks
+    // autosaving safety. A save that starts before then takes its change-count
+    // token too early and the late count re-dirties the saved document, so a
+    // save waits until that count has been reported here.
+    override func save(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType, completionHandler: @escaping (Error?) -> Void) {
+        guard uncountedEdit else { super.save(to: url, ofType: typeName, for: saveOperation, completionHandler: completionHandler); return }
+        savesWaitingForEdit.append { [weak self] in
+            guard let self else { completionHandler(CocoaError(.userCancelled)); return }
+            self.saveWithoutWaiting(to: url, ofType: typeName, for: saveOperation, completionHandler: completionHandler)
+        }
+        // Undo registration can be disabled, so the count may never come.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, !self.savesWaitingForEdit.isEmpty else { return }
+            self.uncountedEdit = false; self.runSavesWaitingForEdit()
+        }
+    }
+    private func saveWithoutWaiting(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType, completionHandler: @escaping (Error?) -> Void) {
+        super.save(to: url, ofType: typeName, for: saveOperation, completionHandler: completionHandler)
+    }
+    private func runSavesWaitingForEdit() {
+        let saves = savesWaitingForEdit
+        savesWaitingForEdit.removeAll()
+        // Leave NSDocument's change-count update before starting a save.
+        if !saves.isEmpty { DispatchQueue.main.async { saves.forEach { $0() } } }
     }
     override func save(_ sender: Any?) {
         synchronizeBeforeSaving { [weak self] in self?.saveSynchronized(sender) }
@@ -257,6 +296,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     private var failureText: NSTextView?
     private let logger = Logger(subsystem: "com.infiniteviewtech.margin", category: "Editor")
     private var tabObservation: NSKeyValueObservation?
+    private weak var observedTabGroup: NSWindowTabGroup?
     var doc: MarkdownDocument { document as! MarkdownDocument }
     var appDelegate: AppDelegate { NSApp.delegate as! AppDelegate }
 
@@ -273,16 +313,16 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         window.isRestorable = true
         window.contentView = webView
         window.center()
-        window.setFrameAutosaveName("MarginEditor")
         window.tabbingMode = .preferred
         window.tabbingIdentifier = "MarginEditor"
         super.init(window: window)
+        // Set on the controller, after init: adopting the window replaces the
+        // window's own autosave name with the controller's, which defaults to empty.
+        windowFrameAutosaveName = "MarginEditor"
         webView.onOpenFiles = { [weak self] urls in
             guard let self, let window = self.window else { return }
             self.appDelegate.openFiles(urls, asTabsIn: window)
         }
-        // Fires when tabs are added, removed, reordered, or moved between windows.
-        tabObservation = window.observe(\.tabGroup?.windows) { [weak self] _, _ in self?.appDelegate.scheduleOpenFilesRefresh() }
         // NSDocument.addWindowController must attach us. Setting document here
         // makes AppKit treat that later call as redundant, so the document's
         // windowControllers stays empty and showWindows has nothing to show.
@@ -482,10 +522,24 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         default: break
         }
     }
+    // NSWindowTabGroup documents `windows` as KVO compliant and in visual tab
+    // order. NSWindow.tabGroup has no such promise, so re-attach whenever this
+    // window has moved to another group. Reading tabGroup before the window is
+    // shown gives it a group of its own and stops it joining the current tabs.
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        observeTabGroup()
+    }
+    private func observeTabGroup() {
+        guard window?.isVisible == true, let group = window?.tabGroup, group !== observedTabGroup else { return }
+        observedTabGroup = group
+        tabObservation = group.observe(\.windows) { [weak self] _, _ in self?.appDelegate.scheduleOpenFilesRefresh() }
+    }
     var tabDocuments: [MarkdownDocument] {
         guard let window else { return [] }
         let open = appDelegate.controller.documents
-        return (window.tabbedWindows ?? [window]).compactMap { $0.windowController?.document as? MarkdownDocument }.filter { doc in open.contains { $0 === doc } }
+        // tabbedWindows is nil whenever the tab bar is hidden; the group is not.
+        return (window.tabGroup?.windows ?? [window]).compactMap { $0.windowController?.document as? MarkdownDocument }.filter { doc in open.contains { $0 === doc } }
     }
     private func tab(for id: String?) -> NSWindow? {
         tabDocuments.first { $0.recoveryID.uuidString == id }?.editorController?.window
@@ -498,6 +552,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         tab.performClose(nil)
     }
     func sendOpenFiles() {
+        observeTabGroup()
         send("openFiles", tabDocuments.map { tab in
             ["id": tab.recoveryID.uuidString, "name": tab.editorName, "path": tab.fileURL?.path ?? "", "modified": tab.isDocumentEdited, "current": tab === document] as [String: Any]
         })
@@ -552,6 +607,30 @@ class DocumentController: NSDocumentController {
         [markdownType, plainTextType].contains(typeName) ? MarkdownDocument.self : nil
     }
     override var defaultType: String? { markdownType }
+    weak var startup: AppDelegate?
+    private var queuedOpens: [(url: URL, display: Bool, completion: (NSDocument?, Bool, Error?) -> Void)] = []
+    private var opening = false
+    // Launch-time Finder opens arrive here before didFinishLaunching, without
+    // going through application(_:open:), so the welcome check counts them here.
+    // Opens run one at a time: concurrent reads finish in any order, and each
+    // window becomes a tab as it is shown, so tabs would not follow the request.
+    override func openDocument(withContentsOf url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
+        queuedOpens.append((url, displayDocument, startup?.trackOpen(completionHandler) ?? completionHandler))
+        openNextQueuedDocument()
+    }
+    private func openNextQueuedDocument() {
+        guard !opening, !queuedOpens.isEmpty else { return }
+        opening = true
+        let next = queuedOpens.removeFirst()
+        performOpen(next.url, display: next.display) { [weak self] document, alreadyOpen, error in
+            next.completion(document, alreadyOpen, error)
+            self?.opening = false
+            self?.openNextQueuedDocument()
+        }
+    }
+    func performOpen(_ url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
+        super.openDocument(withContentsOf: url, display: displayDocument, completionHandler: completionHandler)
+    }
     override func addDocument(_ document: NSDocument) {
         super.addDocument(document)
         (NSApp?.delegate as? AppDelegate)?.scheduleOpenFilesRefresh()
@@ -587,9 +666,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.recoveryStore = recoveryStore
         self.settings = settings
         super.init()
+        controller?.startup = self
     }
     func applicationWillFinishLaunching(_ notification: Notification) {
         if controller == nil { controller = DocumentController() }
+        controller.startup = self
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidFinishRestoringWindows(_:)), name: NSApplication.didFinishRestoringWindowsNotification, object: NSApp)
         buildMenu()
         applySettings()
@@ -623,9 +704,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if controller.documents.isEmpty {
             do {
                 let doc = try controller.makeUntitledDocument(ofType: markdownType)
-                if let markdown = doc as? MarkdownDocument,
-                   let url = Bundle.main.url(forResource: "Welcome", withExtension: "md") {
-                    markdown.text = try String(contentsOf: url, encoding: .utf8)
+                if let markdown = doc as? MarkdownDocument, let welcome = MarkdownDocument.welcomeText() {
+                    markdown.text = welcome; markdown.isWelcome = true
                 }
                 controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
             } catch { controller.presentError(error) }
@@ -672,14 +752,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         openFiles(urls)
     }
     func openFiles(_ urls: [URL]) {
-        pendingFileOpens += urls.count
         for url in urls {
             controller.openDocument(withContentsOf: url, display: true) { [weak self] _, _, error in
-                guard let self else { return }
-                self.pendingFileOpens -= 1
-                if let error { self.controller.presentError(error) }
-                self.finishStartupIfReady()
+                if let error { self?.controller.presentError(error) }
             }
+        }
+    }
+    func trackOpen(_ completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) -> (NSDocument?, Bool, Error?) -> Void {
+        pendingFileOpens += 1
+        return { [weak self] document, alreadyOpen, error in
+            completionHandler(document, alreadyOpen, error)
+            guard let self else { return }
+            self.pendingFileOpens -= 1
+            self.finishStartupIfReady()
         }
     }
     // Editor windows prefer tabs, so ordinary opens join the frontmost window.
@@ -691,7 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let document else { return }
                 if document.windowControllers.isEmpty { document.makeWindowControllers() }
                 if !alreadyOpen, let tab = document.windowControllers.first?.window, tab !== window {
-                    (window.tabbedWindows?.last ?? window).addTabbedWindow(tab, ordered: .above)
+                    window.tabGroup?.addWindow(tab)
                 }
                 document.showWindows()
             }

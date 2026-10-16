@@ -93,5 +93,6 @@
   });
   app.load({ text: app.welcome, name: 'Welcome.md' });
   app.command('folder', { name: 'My Writing', children: [{ name: 'Welcome.md', path: '/Welcome.md' }, { name: 'Notes', children: [{ name: 'A small idea.md', path: '/idea.md' }, { name: 'Reading list.md', path: '/reading.md' }] }] });
+  await tick();
   return results;
 })();

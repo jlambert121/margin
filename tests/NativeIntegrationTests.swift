@@ -23,10 +23,10 @@ final class OpenRequestController: DocumentController {
         }
         return try super.makeUntitledDocument(ofType: typeName)
     }
-    override func openDocument(withContentsOf url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
+    override func performOpen(_ url: URL, display displayDocument: Bool, completionHandler: @escaping (NSDocument?, Bool, Error?) -> Void) {
         requests.append((url, displayDocument))
         if useNativeOpening {
-            super.openDocument(withContentsOf: url, display: displayDocument, completionHandler: completionHandler)
+            super.performOpen(url, display: displayDocument, completionHandler: completionHandler)
         } else if deferOpening {
             pendingCompletions.append(completionHandler)
         } else { completionHandler(nil, false, nil) }
@@ -174,6 +174,48 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             controller.pendingCompletions.removeFirst()(doc, false, nil)
             try expect(controller.untitledRequests == 0, "Welcome appeared beside the opened file")
         }
+        test("Launch-time opens sent straight to the document controller suppress the welcome") {
+            controller.useWindowlessDocuments = true
+            controller.useNativeOpening = false
+            controller.deferOpening = true
+            controller.untitledRequests = 0
+            defer {
+                controller.documents.forEach { controller.removeDocument($0) }
+                controller.pendingCompletions.removeAll()
+                controller.useWindowlessDocuments = false
+                controller.useNativeOpening = true
+                controller.deferOpening = false
+            }
+            let startup = AppDelegate(controller: controller, recoveryStore: recoveryStore)
+            // AppKit delivers Finder's launch-time opens here, before didFinishLaunching.
+            controller.openDocument(withContentsOf: first, display: true) { _, _, _ in }
+            startup.applicationDidFinishRestoringWindows(restored)
+            startup.applicationDidFinishLaunching(launched)
+            try expect(controller.untitledRequests == 0, "Welcome appeared while a launch file was opening")
+            let doc = StartupTestDocument()
+            controller.addDocument(doc)
+            controller.pendingCompletions.removeFirst()(doc, false, nil)
+            try expect(controller.untitledRequests == 0, "Welcome appeared beside the opened file")
+        }
+        test("A restored, unedited welcome document gets its text back") {
+            func restored(from doc: MarkdownDocument) throws -> MarkdownDocument {
+                let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+                doc.encodeRestorableState(with: archiver)
+                archiver.finishEncoding()
+                let unarchiver = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
+                let copy = MarkdownDocument()
+                copy.restoreState(with: unarchiver)
+                return copy
+            }
+            guard let welcome = MarkdownDocument.welcomeText() else { throw CocoaError(.fileReadNoSuchFile) }
+            let doc = MarkdownDocument(); doc.text = welcome; doc.isWelcome = true
+            let copy = try restored(from: doc)
+            try expect(copy.text == welcome && copy.isWelcome, "Restored welcome is blank")
+            let edited = MarkdownDocument(); edited.text = welcome; edited.isWelcome = true
+            edited.edited("# My own notes\n")
+            try expect(!edited.isWelcome, "An edited welcome is still treated as the welcome")
+            try expect(try restored(from: edited).text.isEmpty, "Welcome text replaced a document the user had edited")
+        }
         test("Recovery opens unsaved edits as a separate dirty document without overwriting the file") {
             let draft = RecoveryDraft(id: UUID(), text: "# Unsaved after a crash\n", originalPath: first.path, name: first.lastPathComponent)
             try recoveryStore.write(draft)
@@ -249,7 +291,26 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             defer { doc.close() }
             themed.applySettings()
             try expect(application?.appearance?.name == .darkAqua, "App appearance is not dark")
-            try expect(application?.applicationIconImage !== NSImage(named: NSImage.applicationIconName), "Dock icon was not replaced")
+            // AppKit re-renders the Dock icon, so compare drawn pixels with a tolerance.
+            func pixels(_ image: NSImage?) -> [UInt8] {
+                guard let image, let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                      let context = NSGraphicsContext(bitmapImageRep: bitmap), let data = bitmap.bitmapData else { return [] }
+                NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
+                image.draw(in: NSRect(x: 0, y: 0, width: 32, height: 32))
+                NSGraphicsContext.restoreGraphicsState()
+                return Array(UnsafeBufferPointer(start: data, count: bitmap.bytesPerRow * 32))
+            }
+            func distance(_ a: [UInt8], _ b: [UInt8]) -> Double {
+                a.count == b.count && !a.isEmpty ? zip(a, b).map { abs(Double($0) - Double($1)) }.reduce(0, +) / Double(a.count) : .infinity
+            }
+            let ruled = pixels(AppIconChoice.ruled.image)
+            let dock = pixels(application?.applicationIconImage)
+            let nearest = AppIconChoice.allCases.min { distance(dock, pixels($0.image)) < distance(dock, pixels($1.image)) }
+            try expect(nearest == .ruled, "Dock icon is not the chosen icon (closest: \(nearest?.rawValue ?? "none"))")
+            let chosenDistance = distance(dock, ruled)
+            try expect(chosenDistance < 2, "Dock icon differs from the chosen icon by \(chosenDistance)")
+            settings.appIcon = .night; themed.applySettings()
+            try expect(distance(pixels(application?.applicationIconImage), ruled) > 10 * max(chosenDistance, 0.5), "Choosing Night did not restore the bundle icon")
             guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editor.canSynchronize && !editor.webView.isHidden }
             var bodyTheme: String?
@@ -257,6 +318,16 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { poll(); return bodyTheme == "dark" }
             settings.appearance = .light; themed.applySettings()
             try waitUntil { poll(); return bodyTheme == "light" }
+        }
+        test("Closing a document before its editor loads ignores the editor's late messages") {
+            for _ in 0..<5 {
+                let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                doc.recoveryStore = recoveryStore
+                controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                doc.close()
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(3))
         }
         test("Documents open as tabs, list their tab group, and accept Markdown drops") {
             let opened = { (url: URL) in controller.documents.first { $0.fileURL == url } as? MarkdownDocument }
@@ -291,11 +362,58 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(editorA.webView.prepareForDragOperation(drop) && editorA.webView.performDragOperation(drop), "Markdown drop not performed")
             try waitUntil { opened(second)?.editorController?.window.map { windowA.tabbedWindows?.contains($0) == true } == true }
 
+            var names = ""
+            func pollNames(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("[...document.querySelectorAll('#open-files .open-file-label')].map(e => e.textContent).join('|')") { result, _ in names = result as? String ?? "" } }
+            func tabNames() -> String { (windowA.tabGroup?.windows ?? []).map { ($0.windowController?.document as? MarkdownDocument)?.editorName ?? "?" }.joined(separator: "|") }
+            guard let group = windowA.tabGroup, let last = group.windows.last else { throw CocoaError(.fileReadUnknown) }
+            group.removeWindow(last); group.insertWindow(last, at: 0)
+            let reordered = tabNames()
+            try expect(reordered.hasPrefix((last.windowController?.document as? MarkdownDocument)?.editorName ?? "?"), "Tab was not moved to the front")
+            try waitUntil { pollNames(editorA); return names == reordered }
+            guard let movedEditor = opened(second)?.editorController, let moved = movedEditor.window else { throw CocoaError(.fileReadUnknown) }
+            moved.moveTabToNewWindow(nil)
+            try waitUntil { pollNames(editorA); return names == tabNames() && !names.contains("Another.markdown") }
+            try waitUntil { pollNames(movedEditor); return names == "Another.markdown" }
+            windowA.tabGroup?.addWindow(moved)
+            try waitUntil { pollNames(movedEditor); return names == tabNames() }
+
             guard let firstDoc = opened(first) else { throw CocoaError(.fileReadUnknown) }
             editorA.closeTab(id: firstDoc.recoveryID.uuidString)
             try waitUntil { opened(first) == nil }
             try waitUntil { windowA.tabbedWindows?.count == 3 }
             try waitUntil { pollListed(editorA); return listed == 3 }
+        }
+        test("Files opened together become tabs in the order they were requested") {
+            let names = (1...5).map { "Order \($0).md" }
+            let urls = names.map { root.appendingPathComponent($0) }
+            for url in urls { try "# \(url.lastPathComponent)\n".write(to: url, atomically: true, encoding: .utf8) }
+            for round in 1...3 {
+                delegate.openFiles(urls)
+                try waitUntil { urls.allSatisfy { url in controller.documents.contains { $0.fileURL == url } } }
+                let windows = controller.documents.compactMap { ($0 as? MarkdownDocument)?.editorController?.window }
+                let order = (windows.first?.tabGroup?.windows ?? []).compactMap { ($0.windowController?.document as? MarkdownDocument)?.editorName }
+                for doc in controller.documents { doc.close() }
+                try expect(order == names, "Round \(round): tabs opened as \(order)")
+            }
+        }
+        test("The editor window remembers its frame for the next window") {
+            let key = "NSWindow Frame MarginEditor"
+            UserDefaults.standard.removeObject(forKey: key)
+            defer { UserDefaults.standard.removeObject(forKey: key) }
+            let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            doc.recoveryStore = recoveryStore
+            controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+            guard let window = doc.editorController?.window else { throw CocoaError(.fileReadUnknown) }
+            try expect(window.frameAutosaveName == "MarginEditor", "Editor window has no frame autosave name")
+            let frame = NSRect(x: 120, y: 140, width: 910, height: 640)
+            window.setFrame(frame, display: false)
+            doc.close()
+            try expect(UserDefaults.standard.string(forKey: key) != nil, "Window frame was not saved")
+            let next = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            next.recoveryStore = recoveryStore
+            controller.addDocument(next); next.makeWindowControllers(); next.showWindows()
+            defer { next.close() }
+            try expect(next.editorController?.window?.frame.size == frame.size, "Next window did not reuse the saved size")
         }
         test("Launch without a file registers and shows an editor window") {
             delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
@@ -374,6 +492,13 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             doc.edited("# Updated\n\nSaved with native document handling.\n")
             try save(.saveOperation)
             try expect(!doc.isDocumentEdited, "Save did not clear the dirty state")
+            doc.edited("# Changed after saving\n")
+            try waitUntil { doc.isDocumentEdited }
+            doc.undoManager?.disableUndoRegistration()
+            doc.edited("# Saved with undo registration off\n")
+            doc.undoManager?.enableUndoRegistration()
+            try save(.saveOperation)
+            try expect(try String(contentsOf: destination, encoding: .utf8) == doc.text, "Save without an undo count did not complete")
             let reopened = try controller.makeDocument(withContentsOf: destination, ofType: markdownType) as! MarkdownDocument
             try expect(reopened.text == doc.text, "Saved edits were lost after reopen")
         }
