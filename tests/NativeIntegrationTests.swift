@@ -378,10 +378,10 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { editor.canSynchronize }
             var finished = false
             // execCommand goes through WebKit's own editing, which registers WebKit undo steps.
-            editor.webView.evaluateJavaScript("app.editor.getEditorElements().wwEditor.querySelector('.ProseMirror').focus(); document.execCommand('insertText', false, 'typed '); 1") { _, _ in finished = true }
+            editor.webView.evaluateJavaScript("app.view.contentDOM.focus(); app.view.dispatch({ selection: { anchor: 0 } }); document.execCommand('insertText', false, 'typed '); 1") { _, _ in finished = true }
             try waitUntil { finished && doc.text != "# Start\n" && doc.undoManager?.canUndo == true }
             finished = false
-            editor.webView.evaluateJavaScript("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true })); 1") { _, _ in finished = true }
+            editor.webView.evaluateJavaScript("app.view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true })); 1") { _, _ in finished = true }
             try waitUntil { finished && doc.text == "# Start\n" }
             try expect(doc.undoManager?.canUndo == false, "WebKit editing steps reached the document's undo stack")
             try expect(!doc.isDocumentEdited, "Undoing the only edit left the document edited")

@@ -34,7 +34,6 @@ print(thought)
 | --- | --- |
 | ⌘B | A little emphasis |
 | ⌘F | Find the right words |
-| ⇧⌘F | Focus on the present paragraph |
 
 ---
 

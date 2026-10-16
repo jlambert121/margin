@@ -402,14 +402,6 @@ main {
   margin-left:-6px
 }
 
-#mode-label {
-  font-size:9px;
-  font-weight:500;
-  letter-spacing:1.5px;
-  color:var(--muted);
-  margin-right:7px
-}
-
 #source-button {
   font-size:13px;
   font-family:ui-monospace,monospace
@@ -431,98 +423,97 @@ main {
   overflow:hidden
 }
 
-.toastui-editor-defaultUI {
-  border:0;
-  height:100%!important;
-  font-family:inherit
-}
-
-.toastui-editor-defaultUI-toolbar,.toastui-editor-mode-switch {
-  display:none!important
-}
-
-.toastui-editor-main {
-  height:100%!important
-}
-
-.toastui-editor-main-container {
-  background:var(--paper)
-}
-
-.toastui-editor-ww-container,.toastui-editor-md-container {
-  background:var(--paper)!important
-}
-
-.toastui-editor-contents,.toastui-editor-defaultUI .ProseMirror {
-  font-family:Georgia,'Times New Roman',serif;
-  font-size:17px;
-  line-height:1.85;
-  color:var(--text);
-  max-width:none;
-  margin:0 auto;
-  padding:62px 44px 35vh;
-  min-height:100%
-}
-
-.toastui-editor-contents p {
-  margin:14px 0;
-  line-height:1.85;
+#editor .cm-editor {
+  height:100%;
+  background:var(--paper);
   color:var(--text)
 }
 
-.toastui-editor-contents h1,.toastui-editor-contents h2,.toastui-editor-contents h3,.toastui-editor-contents h4,.toastui-editor-contents h5,.toastui-editor-contents h6 {
-  font-family:-apple-system,BlinkMacSystemFont,sans-serif;
-  color:var(--text);
-  border:0;
-  line-height:1.3;
-  letter-spacing:-.6px
+#editor .cm-editor.cm-focused {
+  outline:none
 }
 
-.toastui-editor-contents h1 {
-  font-size:35px;
-  margin:0 0 25px;
-  font-weight:650;
+#editor .cm-scroller {
+  font-family:Georgia,'Times New Roman',serif;
+  font-size:17px;
+  line-height:1.85
+}
+
+#editor .cm-content {
+  padding:62px 44px 35vh;
+  caret-color:var(--accent)
+}
+
+#editor .cm-line {
   padding:0
 }
 
-.toastui-editor-contents h2 {
+#editor .cm-cursor {
+  border-left-color:var(--accent)
+}
+
+#editor .cm-editor .cm-selectionLayer .cm-selectionBackground,#editor .cm-editor.cm-focused .cm-selectionLayer .cm-selectionBackground {
+  background:var(--select)
+}
+
+#editor .cm-placeholder {
+  color:var(--muted)
+}
+
+#editor.source-mode .cm-scroller {
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:14px;
+  line-height:1.8
+}
+
+.cm-md-heading {
+  font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  font-weight:600;
+  letter-spacing:-.6px;
+  line-height:1.3
+}
+
+#editor .cm-md-h1 {
+  font-size:35px;
+  font-weight:650;
+  padding-bottom:14px
+}
+
+#editor .cm-md-h2 {
   font-size:25px;
-  margin:39px 0 15px;
-  font-weight:600
+  padding-top:24px;
+  padding-bottom:6px
 }
 
-.toastui-editor-contents h3 {
+#editor .cm-md-h3 {
   font-size:20px;
-  margin:28px 0 12px;
-  font-weight:600
+  padding-top:14px;
+  padding-bottom:4px
 }
 
-.toastui-editor-contents h4 {
+.cm-md-h4 {
   font-size:17px
 }
 
-.toastui-editor-contents strong {
+.cm-md-h5,.cm-md-h6 {
+  font-size:15px;
+  color:var(--muted)
+}
+
+.cm-md-strong {
   font-weight:700
 }
 
-.toastui-editor-contents blockquote {
-  margin:25px 0;
-  padding:1px 0 1px 21px;
-  border-left:3px solid #a0b39a;
+.cm-md-em {
+  font-style:italic
+}
+
+.cm-md-strike {
+  text-decoration:line-through;
   color:var(--muted)
 }
 
-.toastui-editor-contents blockquote p {
-  color:var(--muted)
-}
-
-.toastui-editor-contents a {
-  color:var(--accent);
-  text-decoration-color:#a0b39a;
-  text-underline-offset:3px
-}
-
-.toastui-editor-contents code {
+.cm-md-code {
   background:var(--code);
   color:var(--accent);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -531,97 +522,124 @@ main {
   border-radius:3px
 }
 
-.toastui-editor-contents pre {
-  background:var(--code);
-  border:1px solid var(--line);
-  border-radius:6px;
-  padding:18px 22px;
-  margin:22px 0
+.cm-md-link {
+  color:var(--accent);
+  text-decoration:underline;
+  text-decoration-color:#a0b39a;
+  text-underline-offset:3px
 }
 
-.toastui-editor-contents pre code {
-  color:var(--text);
-  background:none;
-  padding:0;
-  font-size:13px;
-  line-height:1.7
-}
-
-.toastui-editor-contents ul,.toastui-editor-contents ol {
-  padding-left:25px;
-  margin:14px 0
-}
-
-.toastui-editor-contents li {
-  color:var(--text);
-  line-height:1.85
-}
-
-.toastui-editor-contents li p {
-  margin:4px 0
-}
-
-.toastui-editor-contents ul>li:before {
-  background:var(--muted)
-}
-
-.toastui-editor-contents table {
-  width:100%;
-  font-family:inherit;
-  font-size:14px;
-  margin:22px 0;
-  border-color:var(--line)
-}
-
-.toastui-editor-contents table th {
-  background:var(--sidebar);
-  font-weight:600;
-  color:var(--text);
-  border:1px solid var(--line)
-}
-
-.toastui-editor-contents table td {
-  border:1px solid var(--line);
-  background:var(--paper)
-}
-
-.toastui-editor-contents table p {
-  margin:0
-}
-
-.toastui-editor-contents hr {
-  border-color:var(--line);
-  margin:32px 0
-}
-
-.toastui-editor-contents img {
-  max-width:100%;
-  border-radius:4px
-}
-
-.toastui-editor-md-container .toastui-editor {
-  max-width:none;
-  margin:auto
-}
-
-.toastui-editor-md-container .ProseMirror {
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:14px;
-  line-height:1.8;
-  padding-top:50px;
-  color:var(--text)
-}
-
-.toastui-editor-md-preview,.toastui-editor-md-splitter {
-  display:none!important
-}
-
-.toastui-editor-md-container {
-  width:100%!important
-}
-
-.toastui-editor-main .toastui-editor-md-container .toastui-editor-md-heading {
+.cm-md-link-source {
   color:var(--accent)
+}
+
+#editor .cm-md-quote {
+  border-left:3px solid #a0b39a;
+  padding-left:21px;
+  color:var(--muted)
+}
+
+.cm-md-bullet,.cm-md-list-number {
+  color:var(--muted)
+}
+
+.cm-md-task {
+  margin:0 .35em 0 0;
+  vertical-align:-1px;
+  accent-color:var(--accent);
+  cursor:pointer
+}
+
+.cm-md-task-done {
+  color:var(--muted);
+  text-decoration:line-through
+}
+
+.cm-md-hr {
+  display:inline-block;
+  width:100%;
+  border-top:1px solid var(--line);
+  vertical-align:middle
+}
+
+#editor .cm-md-codeblock {
+  background:var(--code);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13px;
+  line-height:1.7;
+  padding:0 22px;
+  border-left:1px solid var(--line);
+  border-right:1px solid var(--line)
+}
+
+#editor .cm-md-codeblock-first {
+  border-top:1px solid var(--line);
+  border-radius:6px 6px 0 0;
+  padding-top:10px
+}
+
+#editor .cm-md-codeblock-last {
+  border-bottom:1px solid var(--line);
+  border-radius:0 0 6px 6px;
+  padding-bottom:10px
+}
+
+#editor .cm-md-fence-hidden,#editor .cm-md-setext-underline {
+  font-size:0;
+  line-height:0
+}
+
+.cm-md-fence-label {
+  font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+  font-size:10px;
+  letter-spacing:1.2px;
+  text-transform:uppercase;
+  color:var(--muted)
+}
+
+.cm-md-table-source {
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:14px
+}
+
+.cm-md-table {
+  padding:6px 0;
+  cursor:text
+}
+
+.cm-md-table table,#print-view table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:14px
+}
+
+.cm-md-table th,.cm-md-table td,#print-view th,#print-view td {
+  border:1px solid var(--line);
+  padding:6px 10px;
+  text-align:left;
+  line-height:1.5
+}
+
+.cm-md-table th {
+  background:var(--sidebar);
+  font-weight:600
+}
+
+.cm-md-image {
+  display:block;
+  max-width:100%;
+  border-radius:4px;
+  margin:8px 0
+}
+
+.cm-md-html {
+  color:var(--muted);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.85em
+}
+
+#print-view {
+  display:none
 }
 
 #statusbar {
@@ -802,16 +820,7 @@ body.no-sidebar #sidebar {
   display:none
 }
 
-body.focus-mode .toastui-editor-ww-container .ProseMirror> :not(.active-block) {
-  opacity:.22;
-  transition:opacity .18s
-}
-
-body.focus-mode .toastui-editor-ww-container .ProseMirror>.active-block {
-  opacity:1
-}
-
-body.typewriter .toastui-editor-contents,body.typewriter .ProseMirror {
+body.typewriter #editor .cm-content {
   padding-bottom:50vh
 }
 
@@ -829,22 +838,11 @@ body[data-theme=dark] {
   --accent:#a2b99a
 }
 
-.toastui-editor-dark {
-  background:var(--paper)!important
-}
-
-body[data-theme=dark] .toastui-editor-contents h1 {
-  border-color:var(--line)
-}
-
 @media(max-width:850px) {
   #sidebar {
     width:210px
   }
-  #mode-label {
-    display:none
-  }
-  .toastui-editor-contents,.toastui-editor-defaultUI .ProseMirror {
+  #editor .cm-content {
     padding-left:32px;
     padding-right:32px
   }
@@ -854,41 +852,45 @@ body[data-theme=dark] .toastui-editor-contents h1 {
 }
 
 @media print {
-  #sidebar,#toolbar,#statusbar,#find-bar,.popover,#toast {
+  #app,#toast,.popover {
     display:none!important
-  }
-  #app,main,#editor,.toastui-editor-main,.toastui-editor-ww-container,.toastui-editor-defaultUI {
-    height:auto!important;
-    overflow:visible!important
   }
   body {
-    --paper:#fff;
-    --text:#222;
-    --muted:#666;
-    --line:#ddd;
-    --code:#f5f5f5;
-    --accent:#345
+    background:#fff
   }
-  body .toastui-editor-contents,body .toastui-editor-defaultUI .ProseMirror {
-    max-width:none;
-    padding:0!important;
-    font-size:12pt;
-    opacity:1!important
+  #print-view {
+    display:block;
+    color:#222;
+    font:12pt/1.7 Georgia,'Times New Roman',serif
   }
-  body.focus-mode .toastui-editor-ww-container .ProseMirror>* {
-    opacity:1!important
-  }
-  .toastui-editor-md-container {
-    display:none!important
-  }
-  .toastui-editor-ww-container {
-    display:block!important
-  }
-  pre,blockquote,tr,img {
-    break-inside:avoid
-  }
-  h1,h2,h3 {
+  #print-view h1,#print-view h2,#print-view h3,#print-view h4 {
+    font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+    line-height:1.3;
     break-after:avoid
   }
+  #print-view pre,#print-view code {
+    background:#f5f5f5;
+    border-radius:4px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:10pt
+  }
+  #print-view pre {
+    padding:12px 16px;
+    white-space:pre-wrap
+  }
+  #print-view blockquote {
+    border-left:3px solid #a0b39a;
+    margin-left:0;
+    padding-left:18px;
+    color:#666
+  }
+  #print-view img {
+    max-width:100%
+  }
+  #print-view .task-list-item {
+    list-style:none
+  }
+  #print-view pre,#print-view blockquote,#print-view tr,#print-view img {
+    break-inside:avoid
+  }
 }
-

@@ -37,18 +37,6 @@ import UniformTypeIdentifiers
             try reopened.read(from: Data(contentsOf: url), ofType: markdownType)
             try expect(reopened.text == doc.text, "Saved content did not round trip")
         }
-        test("Saving is blocked while newer editor changes cannot be serialized") {
-            let doc = MarkdownDocument(); doc.text = "Last received text"
-            doc.recoveryStore = recoveryStore
-            defer { doc.close() }
-            doc.hasUnserializedEditorChanges = true
-            var blocked = false
-            do { _ = try doc.data(ofType: markdownType) } catch { blocked = true }
-            try expect(blocked && doc.text == "Last received text", "A stale version could be saved as current")
-            doc.recoveryStore = recoveryStore
-            doc.edited("The full current text")
-            try expect(try doc.data(ofType: markdownType) == Data("The full current text".utf8), "Saving stayed blocked after serialization recovered")
-        }
         test("Changes register native undo and redo") {
             let doc = MarkdownDocument(); doc.undoManager = UndoManager()
             doc.recoveryStore = recoveryStore

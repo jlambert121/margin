@@ -16,13 +16,13 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 
 ## Included
 
-- Editable rendered Markdown with headings, inline formatting, nested lists, task lists, quotes, tables, links, images, and fenced code blocks.
-- An exact-text Markdown source editor. Switching modes preserves the original source until an edit is made.
+- Live preview editing: the document is always the exact Markdown text. Headings, emphasis, strikethrough, inline code, links, quotes, lists, task checkboxes, horizontal rules, fenced code blocks, images, and tables render in place, and their Markdown syntax appears as editable text only where the cursor is. Typing Markdown (such as `## Heading`) renders once the cursor moves on.
+- Source mode (⌘/) shows the same document with all syntax visible.
 - Open files list, folder tree, file filtering, and a clickable document outline.
 - Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling. Documents open as native macOS tabs and can be dragged out into their own windows.
 - Search, word and character counts, line counts, and estimated reading time.
 - Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
-- Paragraph focus and typewriter scrolling in live preview.
+- Typewriter scrolling.
 - HTML export and native printing with Save as PDF.
 - Local images underneath the Markdown file's directory. Dropped or pasted image files are embedded as data URLs; no upload service is used.
 - Bundled editor and sanitizer assets; no analytics or network dependency at launch. Images with remote URLs load from their original hosts.
@@ -37,7 +37,6 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 | ⌘B / ⌘I / ⌘K | Bold / Italic / Link |
 | ⌘1–6 / ⌘0 | Heading / Body |
 | ⌘F | Find |
-| ⇧⌘F | Paragraph focus |
 | ⇧⌘L | Toggle sidebar |
 | ⌘P | Print / Save as PDF |
 
@@ -46,9 +45,12 @@ Command-click links to open them. New documents, File → Open, Open Recent, Fin
 ## Implementation
 
 - `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, menus, file panels, folder browsing, export/printing, and restricted local-image URL handler.
-- `web/src/app.js`: editor integration, bridge messages, source buffer, navigation, search, formatting, and view state.
+- `web/src/app.js`: CodeMirror editor setup, bridge messages, navigation, search, formatting commands, and view state.
+- `web/src/live-preview.js`: the live preview, built from CodeMirror decorations over the Markdown syntax tree.
+- `web/src/markdown.js`: Markdown to sanitized HTML (markdown-it and DOMPurify) for export, printing, statistics, and table previews.
 - `web/src/style.css`: writing typography, application layout, themes, and print styles.
-- `web/vendor/`: pinned TOAST UI Editor 3.2.2 and DOMPurify 3.4.17, with upstream license files. The current sanitizer overrides the editor's bundled legacy sanitizer.
+- `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing, markdown-it, and DOMPurify), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
+- `tools/editor-bundle/` and `scripts/build-editor.sh` (`npm run build:editor`): rebuild the vendored bundle with Rollup. Only needed after changing the bundle entry or a dependency version, and the only step that needs `npm install` (Node.js 20 or later).
 - `Resources/`: editable welcome document, Info.plist, the bundle icon, and the icon choices in `Resources/Icons/`.
 - `scripts/build.sh`: compiles Swift, copies web assets into the app bundle, and applies an ad hoc signature.
 
@@ -56,16 +58,15 @@ For Swift changes, rebuild the app. Web files are copied during every build. Run
 
 ## Verification
 
-The application builds with the installed Swift compiler. The default suite has 46 checks: fourteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, thirteen document/filesystem/session checks, and nineteen editor/bridge behavior checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, failed serialization, undo keys reaching native undo, the open-files list, and rebuilding the editor when the color scheme changes. The editor checks use a DOM emulator and do not verify layout.
+The application builds with the installed Swift compiler. The default suite has 49 checks: fourteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, twelve document/filesystem/session checks, and twenty-three editor checks in WebKit: sixteen behavior checks and seven native bridge checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, text from the app not being reported back as edits, undo keys reaching native undo, the open-files list, and color scheme changes. The WebKit checks cover live preview rendering, markers appearing at the cursor, typed Markdown rendering, task checkboxes, tables, source mode, formatting commands, outline, search, sanitizing, export and print rendering, and that the page raises no uncaught errors. The bridge checks load the page in native mode against a recording message handler (`tests/bridge.setup.js`).
 
-With Node.js 20.19 or later installed:
+With Node.js installed (used only for syntax checks; no packages are needed):
 
 ```sh
-npm install
 npm test
 ```
 
-This installs a development-only DOM emulator. Building and running the app do not require Node.js or npm.
+Building and running the app do not require Node.js or npm.
 
 For the 24 desktop checks — visible windows on launch and file opening, tabs and the open-files list, Markdown drops, ordered opens, editor undo, appearance and Dock icon, window frames, the native Open → edit → Save As → Save → reopen flow, menu validation, and a simulated editor-process failure followed by retry — run this in a normal macOS desktop session:
 
@@ -95,12 +96,12 @@ Edits are sent to the native document as they happen. Recovery copies are writte
 
 On launch, recovery copies open as unsaved documents named `Recovered …`, without overwriting the original files. Identical documents already restored are not duplicated. Save As lets you choose the destination. Successful saves, Revert, and intentional document closes remove the corresponding recovery copy. Damaged recovery files are reported and retained for inspection.
 
-Save and Save As read a current editor snapshot before proceeding when the editor is available. Load identifiers and edit revisions prevent delayed messages from overwriting newer text. A known failure to serialize rich text blocks saving an older version as if it were current, and blocks switching to source mode until the text can be read. The native failure view explicitly saves only the last received version displayed there.
+Save and Save As read a current editor snapshot before proceeding when the editor is available. Load identifiers and edit revisions prevent delayed messages from overwriting newer text. The native failure view explicitly saves only the last received version displayed there.
 
 ## First-version boundaries
 
 This implements the core Markdown editing workflow. Math typesetting, Mermaid rendering, advanced syntax highlighting, footnote tooling, custom CSS theme import, Pandoc formats, and iCloud coordination are not implemented. Code fences display their contents as plain code.
 
-Rich-text edits serialize Markdown and can normalize spacing or unsupported syntax. Use source mode for documents whose exact syntax must be retained, especially front matter, math, and custom extensions. Reading or toggling modes without editing preserves the original bytes as UTF-8 text. The app rejects files that are not UTF-8.
+The editor edits the Markdown text directly, so the file keeps exactly what was typed; nothing is reformatted. Syntax the live preview does not render, such as front matter, math, and HTML, stays visible as text. The app rejects files that are not UTF-8.
 
 Local image paths must stay within the document directory; parent-directory and symbolic-link escapes are rejected. Exported HTML retains relative image references, so save it beside its Markdown file or use embedded/remote images. The folder browser skips hidden files, symlinks, dependency/build directories, and limits scans to 5,000 entries and 12 directory levels.

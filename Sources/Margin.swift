@@ -22,7 +22,6 @@ final class MarkdownDocument: NSDocument {
     var recoveryID = UUID()
     var recoveredName: String?
     var recoveredOriginalURL: URL?
-    var hasUnserializedEditorChanges = false
     var isWelcome = false
     var onRecoveryError: ((Error) -> Void)?
     private var checkpoint: DispatchWorkItem?
@@ -47,12 +46,7 @@ final class MarkdownDocument: NSDocument {
         editorController = controller
         addWindowController(controller)
     }
-    override func data(ofType typeName: String) throws -> Data {
-        guard !hasUnserializedEditorChanges else {
-            throw NSError(domain: "Margin.Editor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Some editor changes could not be read. Saving was cancelled to avoid writing an older version of your text."])
-        }
-        return Data(text.utf8)
-    }
+    override func data(ofType typeName: String) throws -> Data { Data(text.utf8) }
     override func encodeRestorableState(with coder: NSCoder) {
         super.encodeRestorableState(with: coder)
         coder.encode(recoveryID.uuidString, forKey: "Margin.recoveryID")
@@ -92,7 +86,6 @@ final class MarkdownDocument: NSDocument {
                           userInfo: [NSLocalizedDescriptionKey: "This file is not UTF-8 text. Convert it to UTF-8 before opening it."])
         }
         text = decoded
-        hasUnserializedEditorChanges = false
         editorController?.loadDocument()
     }
     override func revert(toContentsOf url: URL, ofType typeName: String) throws {
@@ -112,7 +105,6 @@ final class MarkdownDocument: NSDocument {
         Bundle.main.url(forResource: "Welcome", withExtension: "md").flatMap { try? String(contentsOf: $0, encoding: .utf8) }
     }
     func edited(_ next: String) {
-        hasUnserializedEditorChanges = false
         guard next != text else { return }
         isWelcome = false
         let previous = text
@@ -391,7 +383,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
                 return
             }
             if self.session.acceptChange(token: token, revision: revision) { self.doc.edited(text) }
-            self.doc.hasUnserializedEditorChanges = false
             completion(true)
         }
     }
@@ -450,8 +441,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     }
     @objc private func retryEditor(_ sender: Any?) { startEditor() }
     @objc private func saveProtectedText(_ sender: Any?) {
-        // The fallback explicitly offers the displayed, last-received text.
-        doc.hasUnserializedEditorChanges = false
         doc.saveAs(sender)
     }
     func send(_ name: String, _ value: Any? = nil) {
@@ -509,11 +498,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             let message = body["message"] as? String ?? "An editor operation failed."
             if session.isLoaded { reportEditorError(message) }
             else { showEditorFailure(message) }
-        case "editorSerializationError":
-            guard let token = body["token"] as? String, session.accepts(token) else { return }
-            doc.hasUnserializedEditorChanges = true
-            if !doc.isDocumentEdited { doc.updateChangeCount(.changeDone) }
-            reportEditorError("The latest edit could not be converted to Markdown. Save will retry reading the editor; if that fails, copy your text before closing the window.")
         case "undo": undoDocument(nil)
         case "redo": redoDocument(nil)
         case "new": app?.newDocument(nil)
@@ -610,9 +594,9 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         }
     }
     @objc func printDocument(_ sender: Any?) {
-        // Ensure source mode is converted before the print operation snapshots it.
+        // The page prints a rendered copy of the Markdown rather than the editor.
         guard canSynchronize else { reportEditorError("Printing is unavailable until the editor has loaded."); return }
-        webView.evaluateJavaScript("if(window.app.isSource()) window.app.command('source')") { [weak self] _, error in
+        webView.evaluateJavaScript("window.app.preparePrint()") { [weak self] _, error in
             guard let self, let window = self.window else { return }
             if let error { self.reportEditorError("The document could not be prepared for printing: \(error.localizedDescription)"); return }
             let info = self.doc.printInfo
@@ -924,7 +908,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let format = menu("Format")
         command(format, "Bold", "format:bold", "b"); command(format, "Italic", "format:italic", "i"); command(format, "Strikethrough", "format:strike"); command(format, "Inline Code", "format:code"); format.addItem(.separator()); command(format, "Link…", "format:link", "k"); command(format, "Image…", "format:image")
         let view = menu("View")
-        command(view, "Toggle Sidebar", "sidebar", "l", modifiers: [.command, .shift]); command(view, "Document Outline", "outline"); command(view, "Source Mode", "source", "/"); view.addItem(.separator()); command(view, "Focus Mode", "focus", "f", modifiers: [.command, .shift]); command(view, "Typewriter Mode", "typewriter"); view.addItem(.separator()); item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", modifiers: [.command, .control])
+        command(view, "Toggle Sidebar", "sidebar", "l", modifiers: [.command, .shift]); command(view, "Document Outline", "outline"); command(view, "Source Mode", "source", "/"); view.addItem(.separator()); command(view, "Typewriter Mode", "typewriter"); view.addItem(.separator()); item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", modifiers: [.command, .control])
         let window = menu("Window"); item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"); item(window, "Zoom", #selector(NSWindow.performZoom(_:))); window.addItem(.separator()); item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:))); NSApp?.windowsMenu = window
         return bar
     }
