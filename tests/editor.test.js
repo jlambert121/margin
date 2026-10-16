@@ -49,12 +49,81 @@
     $$('.cm-md-task')[1].click(); await tick();
     assert(app.getMarkdown() === '- [x] One\n- [ ] Two\n', 'Unchecking a task did not edit its marker');
   });
-  await test('Tables render until the cursor enters them', async () => {
-    const text = 'Before\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter\n';
-    app.load({ text, name: 'Table.md' }); cursorAt(0); await tick();
-    assert($$('.cm-md-table').length === 1 && !$$('.cm-md-table-source').length, 'Table not rendered outside it');
-    cursorAt(text.indexOf('| 1')); await tick();
-    assert(!$$('.cm-md-table').length && $$('.cm-md-table-source').length === 3, 'Table source not shown inside it');
+  const tableText = 'Before\n\n| Name | Value |\n| :--- | :---: |\n| **Bold** | a \\| b |\n| Plain | 2 |\n\nAfter\n';
+  const grid = () => document.querySelector('.cm-md-table table');
+  const cell = (row, col) => document.querySelector(`.cm-md-table [data-row="${row}"][data-col="${col}"]`);
+  const editing = () => document.querySelector('.cm-md-cell-editing');
+  const press = (target, key, init = {}) => target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init }));
+  const typeInCell = text => { const target = editing(); target.textContent = text; target.dispatchEvent(new InputEvent('input', { bubbles: true })); };
+  const menuItem = async (row, col, label) => {
+    cell(row, col).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    const button = [...document.querySelectorAll('.table-menu button')].find(b => b.textContent === label);
+    assert(button && !button.disabled, `Menu item unavailable: ${label}`);
+    button.click(); await tick();
+  };
+  await test('Tables render as a grid with inline formatting and alignment', async () => {
+    app.load({ text: tableText, name: 'Table.md' }); cursorAt(0); await tick();
+    assert(grid() && grid().querySelectorAll('th').length === 2 && grid().querySelectorAll('tbody tr').length === 2, 'Grid shape wrong');
+    assert(cell(1, 0).querySelector('strong')?.textContent === 'Bold', 'Inline Markdown not rendered in a cell');
+    assert(cell(1, 1).textContent === 'a | b', 'Escaped pipe shown wrong: ' + cell(1, 1).textContent);
+    assert(cell(0, 1).style.textAlign === 'center' && cell(0, 0).style.textAlign === 'left', 'Column alignment not applied');
+    cursorAt(tableText.indexOf('| Plain')); await tick();
+    assert(grid(), 'Cursor next to the table switched it to Markdown');
+  });
+  await test('Editing a cell changes only that cell and keeps the cell focused', async () => {
+    app.load({ text: tableText, name: 'Table.md' }); await tick();
+    cell(1, 0).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    const target = editing();
+    assert(target === cell(1, 0) && target.textContent === '**Bold**', 'Editing cell does not show its Markdown');
+    typeInCell('**Bolder** | text'); await tick();
+    const expected = tableText.replace('**Bold**', '**Bolder** \\| text');
+    assert(app.getMarkdown() === expected, 'Cell edit rewrote more than the cell: ' + JSON.stringify(app.getMarkdown()));
+    assert(editing() === target && target.isConnected, 'The edited cell was replaced while typing');
+    press(target, 'Escape'); await tick();
+    assert(!editing() && cell(1, 0).querySelector('strong')?.textContent === 'Bolder', 'Leaving the cell did not render it');
+  });
+  await test('Tab and Enter move between cells, and Tab in the last cell adds a row', async () => {
+    app.load({ text: tableText, name: 'Table.md' }); await tick();
+    cell(0, 0).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    press(editing(), 'Tab');
+    assert(editing() === cell(0, 1), 'Tab did not move right');
+    press(editing(), 'Enter');
+    assert(editing() === cell(1, 1), 'Enter did not move down');
+    press(editing(), 'Tab', { shiftKey: true });
+    assert(editing() === cell(1, 0), 'Shift-Tab did not move left');
+    cell(2, 1).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    press(editing(), 'Tab'); await tick();
+    assert(app.getMarkdown() === tableText.replace('| Plain | 2 |', '| Plain | 2 |\n|  |  |'), 'Tab at the end did not add a row: ' + JSON.stringify(app.getMarkdown()));
+    assert(editing() === cell(3, 0), 'New row not focused');
+    typeInCell('New'); await tick();
+    assert(app.getMarkdown().includes('| New |  |'), 'Typing in the new row failed: ' + JSON.stringify(app.getMarkdown()));
+  });
+  await test('The table menu edits rows, columns, and alignment', async () => {
+    app.load({ text: tableText, name: 'Table.md' }); cursorAt(0); await tick();
+    await menuItem(1, 1, 'Insert Column Right');
+    assert(app.getMarkdown().includes('| Name | Value |  |\n| :--- | :---: | --- |\n| **Bold** | a \\| b |  |'), 'Insert column: ' + app.getMarkdown());
+    await menuItem(0, 2, 'Align Right');
+    assert(app.getMarkdown().includes('| :--- | :---: | ---: |'), 'Align: ' + app.getMarkdown());
+    await menuItem(1, 2, 'Delete Column');
+    assert(app.getMarkdown().includes('| Name | Value |\n| :--- | :---: |'), 'Delete column: ' + app.getMarkdown());
+    await menuItem(1, 0, 'Move Row Down');
+    assert(app.getMarkdown().includes('| Plain | 2 |\n| **Bold** | a \\| b |'), 'Move row: ' + app.getMarkdown());
+    await menuItem(1, 0, 'Move Column Right');
+    assert(app.getMarkdown().includes('| Value | Name |'), 'Move column: ' + app.getMarkdown());
+    await menuItem(2, 0, 'Delete Row');
+    assert(!app.getMarkdown().includes('Bold'), 'Delete row: ' + app.getMarkdown());
+    await menuItem(1, 0, 'Insert Row Above');
+    assert(grid().querySelectorAll('tbody tr').length === 2 && editing() === cell(1, 0), 'Insert row above: ' + app.getMarkdown());
+    press(editing(), 'Escape'); await tick();
+  });
+  await test('Edit as Markdown shows the table source until the cursor leaves it', async () => {
+    app.load({ text: tableText, name: 'Table.md' }); cursorAt(0); await tick();
+    await menuItem(1, 0, 'Edit as Markdown');
+    assert(!grid() && $$('.cm-md-table-source').length === 4, 'Table source not shown');
+    cursorAt(tableText.indexOf('| Plain') + 3); await tick();
+    assert(!grid(), 'Moving inside the table hid its source');
+    cursorAt(0); await tick();
+    assert(grid(), 'Leaving the table did not restore the grid');
   });
   await test('Source mode shows plain Markdown in the same editor', async () => {
     app.load({ text: '# Title\n\n**Bold**\n', name: 'Source.md' }); blur(); await tick();

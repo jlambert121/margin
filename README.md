@@ -16,7 +16,8 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 
 ## Included
 
-- Live preview editing: the document is always the exact Markdown text. Headings, emphasis, strikethrough, inline code, links, quotes, lists, task checkboxes, horizontal rules, fenced code blocks, images, and tables render in place, and their Markdown syntax appears as editable text only where the cursor is. Typing Markdown (such as `## Heading`) renders once the cursor moves on.
+- Live preview editing: the document is always the exact Markdown text. Headings, emphasis, strikethrough, inline code, links, quotes, lists, task checkboxes, horizontal rules, fenced code blocks, and images render in place, and their Markdown syntax appears as editable text only where the cursor is. Typing Markdown (such as `## Heading`) renders once the cursor moves on.
+- Tables edit as a grid: click a cell to edit its Markdown; Tab/Shift-Tab, Enter, and the up/down arrows move between cells, and Tab in the last cell adds a row. Right-click a cell to insert, delete, or move rows and columns, set column alignment, or edit the table as Markdown. Cell edits rewrite only that cell's text; column changes rewrite the table's rows.
 - Source mode (⌘/) shows the same document with all syntax visible.
 - Open files list, folder tree, file filtering, and a clickable document outline.
 - Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling. Documents open as native macOS tabs and can be dragged out into their own windows.
@@ -47,6 +48,7 @@ Command-click links to open them. New documents, File → Open, Open Recent, Fin
 - `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, menus, file panels, folder browsing, export/printing, and restricted local-image URL handler.
 - `web/src/app.js`: CodeMirror editor setup, bridge messages, navigation, search, formatting commands, and view state.
 - `web/src/live-preview.js`: the live preview, built from CodeMirror decorations over the Markdown syntax tree.
+- `web/src/table-editor.js`: the grid table editor, a CodeMirror widget that edits the table's Markdown text.
 - `web/src/markdown.js`: Markdown to sanitized HTML (markdown-it and DOMPurify) for export, printing, statistics, and table previews.
 - `web/src/style.css`: writing typography, application layout, themes, and print styles.
 - `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing, markdown-it, and DOMPurify), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
@@ -58,7 +60,7 @@ For Swift changes, rebuild the app. Web files are copied during every build. Run
 
 ## Verification
 
-The application builds with the installed Swift compiler. The default suite has 49 checks: fourteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, twelve document/filesystem/session checks, and twenty-three editor checks in WebKit: sixteen behavior checks and seven native bridge checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, text from the app not being reported back as edits, undo keys reaching native undo, the open-files list, and color scheme changes. The WebKit checks cover live preview rendering, markers appearing at the cursor, typed Markdown rendering, task checkboxes, tables, source mode, formatting commands, outline, search, sanitizing, export and print rendering, and that the page raises no uncaught errors. The bridge checks load the page in native mode against a recording message handler (`tests/bridge.setup.js`).
+The application builds with the installed Swift compiler. The default suite has 53 checks: fourteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, twelve document/filesystem/session checks, and twenty-seven editor checks in WebKit: twenty behavior checks and seven native bridge checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, text from the app not being reported back as edits, undo keys reaching native undo, the open-files list, and color scheme changes. The WebKit checks cover live preview rendering, markers appearing at the cursor, typed Markdown rendering, task checkboxes, grid table editing (cells, keyboard movement, the table menu, and Edit as Markdown), source mode, formatting commands, outline, search, sanitizing, export and print rendering, and that the page raises no uncaught errors. The bridge checks load the page in native mode against a recording message handler (`tests/bridge.setup.js`).
 
 With Node.js installed (used only for syntax checks; no packages are needed):
 

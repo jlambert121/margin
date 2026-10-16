@@ -26,5 +26,6 @@
   window.MarginMarkdown = {
     renderDocument: text => DOMPurify.sanitize(documentRenderer.render(text)),
     renderFragment: text => DOMPurify.sanitize(fragmentRenderer.render(text)),
+    renderInline: text => DOMPurify.sanitize(fragmentRenderer.renderInline(text)),
   };
 })();

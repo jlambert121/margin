@@ -6,6 +6,7 @@ node --check web/src/app.js
 node --check web/src/diagnostics.js
 node --check web/src/markdown.js
 node --check web/src/live-preview.js
+node --check web/src/table-editor.js
 plutil -lint Resources/Info.plist
 ./scripts/test-native.sh
 swiftc -D TESTING -parse-as-library -module-cache-path "$MODULE_CACHE" -framework Cocoa -framework WebKit Sources/*.swift tests/DocumentTests.swift -o build/DocumentTests

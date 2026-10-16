@@ -65,23 +65,6 @@
     }
     ignoreEvent() { return true; }
   }
-  // Clicking a rendered table moves the cursor into its source to edit it.
-  class TableWidget extends WidgetType {
-    constructor(source) { super(); this.source = source; }
-    eq(other) { return other.source === this.source; }
-    toDOM(view) {
-      const table = document.createElement('div');
-      table.className = 'cm-md-table';
-      table.innerHTML = MarginMarkdown.renderFragment(this.source);
-      table.addEventListener('mousedown', event => {
-        event.preventDefault();
-        view.dispatch({ selection: { anchor: view.posAtDOM(table) } });
-        view.focus();
-      });
-      return table;
-    }
-    ignoreEvent() { return true; }
-  }
   const bullet = new BulletWidget();
   const rule = new RuleWidget();
 
@@ -202,8 +185,8 @@
         }
         case 'Table': {
           const first = doc.lineAt(from), last = doc.lineAt(to);
-          if (touches(first.from, last.to)) eachLine(from, to, line => lineClass('cm-md-table-source', line.from));
-          else add(Decoration.replace({ widget: new TableWidget(doc.sliceString(first.from, last.to)), block: true }), first.from, last.to);
+          if (state.field(MarginTables.sourceTables).includes(first.from)) eachLine(from, to, line => lineClass('cm-md-table-source', line.from));
+          else add(Decoration.replace({ widget: new MarginTables.TableWidget(doc.sliceString(first.from, last.to)), block: true }), first.from, last.to);
           return false;
         }
         case 'Escape': {
@@ -223,12 +206,11 @@
   const decorations = StateField.define({
     create: decorate,
     update(value, tr) {
-      const refocused = tr.effects.some(effect => effect.is(setFocused));
-      return tr.docChanged || tr.selection || refocused || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? decorate(tr.state) : value;
+      return tr.docChanged || tr.selection || tr.effects.length || syntaxTree(tr.state) !== syntaxTree(tr.startState) ? decorate(tr.state) : value;
     },
     provide: field => EditorView.decorations.from(field),
   });
 
   // setFocused is exported so tests without a focusable window can simulate focus.
-  window.MarginLivePreview = { extension: [focused, trackFocus, decorations], setFocused };
+  window.MarginLivePreview = { extension: [focused, trackFocus, MarginTables.sourceTables, decorations], setFocused };
 })();

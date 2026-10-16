@@ -603,8 +603,31 @@ main {
 }
 
 .cm-md-table {
-  padding:6px 0;
-  cursor:text
+  padding:6px 0
+}
+
+.cm-md-table th,.cm-md-table td {
+  cursor:text;
+  min-width:3em
+}
+
+.cm-md-table .cm-md-cell-editing {
+  outline:2px solid var(--accent);
+  outline-offset:-2px;
+  background:var(--paper);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:13px
+}
+
+.table-menu {
+  right:auto;
+  width:190px
+}
+
+.table-menu button:disabled {
+  color:var(--muted);
+  opacity:.5;
+  cursor:default
 }
 
 .cm-md-table table,#print-view table {
