@@ -387,7 +387,10 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         case "loaded":
             guard !hasEditorFailure, let token = body["token"] as? String else { return }
             session.acknowledge(token)
-            if session.isLoaded { loadTimeout?.cancel(); loadTimeout = nil; webView.isHidden = false }
+            if session.isLoaded {
+                loadTimeout?.cancel(); loadTimeout = nil; webView.isHidden = false
+                send("theme", appDelegate.settings.appearance.rawValue)
+            }
         case "changed":
             if let token = body["token"] as? String, let text = body["text"] as? String,
                let revision = body["revision"] as? Int, session.acceptChange(token: token, revision: revision) {
@@ -421,12 +424,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             }
         case "openExternal":
             if let string = body["url"] as? String, let url = URL(string: string), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
-        case "appearance":
-            switch body["theme"] as? String {
-            case "light": window?.appearance = NSAppearance(named: .aqua)
-            case "dark": window?.appearance = NSAppearance(named: .darkAqua)
-            default: window?.appearance = nil
-            }
         default: break
         }
     }
@@ -501,21 +498,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var workspace: URL?
     var controller: DocumentController!
     let recoveryStore: RecoveryStore
+    let settings: Settings
+    private var settingsWindow: SettingsWindowController?
     private var pendingFileOpens = 0
     private var launchFinished = false
     private var restorationFinished = false
     private var startupCompleted = false
     var currentEditor: EditorWindowController? { NSApp.keyWindow?.windowController as? EditorWindowController }
 
-    init(controller: DocumentController? = nil, recoveryStore: RecoveryStore = .shared) {
+    init(controller: DocumentController? = nil, recoveryStore: RecoveryStore = .shared, settings: Settings = Settings()) {
         self.controller = controller
         self.recoveryStore = recoveryStore
+        self.settings = settings
         super.init()
     }
     func applicationWillFinishLaunching(_ notification: Notification) {
         if controller == nil { controller = DocumentController() }
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidFinishRestoringWindows(_:)), name: NSApplication.didFinishRestoringWindowsNotification, object: NSApp)
         buildMenu()
+        applySettings()
         if let path = UserDefaults.standard.string(forKey: "workspace"), FileManager.default.fileExists(atPath: path) { workspace = URL(fileURLWithPath: path) }
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -658,6 +659,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         currentEditor?.send(parts[0], parts.count > 1 ? parts[1] : nil)
     }
     @objc func exportHTML(_ sender: Any?) { currentEditor?.send("exportHTML") }
+    @objc func showSettings(_ sender: Any?) {
+        if settingsWindow == nil { settingsWindow = SettingsWindowController(settings: settings) { [weak self] in self?.applySettings() } }
+        settingsWindow?.refresh()
+        settingsWindow?.showWindow(sender)
+    }
+    func applySettings() {
+        NSApp?.appearance = settings.appearance.appearance
+        NSApp?.applicationIconImage = settings.appIcon.dockImage
+        for doc in controller.documents { (doc as? MarkdownDocument)?.editorController?.send("theme", settings.appearance.rawValue) }
+    }
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         for url in controller.recentDocumentURLs {
@@ -691,6 +702,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let app = menu("Margin")
         item(app, "About Margin", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
         app.addItem(.separator())
+        item(app, "Settings…", #selector(showSettings(_:)), ",", target: self)
+        app.addItem(.separator())
         item(app, "Hide Margin", #selector(NSApplication.hide(_:)), "h")
         item(app, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", modifiers: [.command, .option])
         item(app, "Show All", #selector(NSApplication.unhideAllApplications(_:)))
@@ -719,7 +732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let format = menu("Format")
         command(format, "Bold", "format:bold", "b"); command(format, "Italic", "format:italic", "i"); command(format, "Strikethrough", "format:strike"); command(format, "Inline Code", "format:code"); format.addItem(.separator()); command(format, "Link…", "format:link", "k"); command(format, "Image…", "format:image")
         let view = menu("View")
-        command(view, "Toggle Sidebar", "sidebar", "l", modifiers: [.command, .shift]); command(view, "Document Outline", "outline"); command(view, "Source Mode", "source", "/"); view.addItem(.separator()); command(view, "Focus Mode", "focus", "f", modifiers: [.command, .shift]); command(view, "Typewriter Mode", "typewriter"); view.addItem(.separator()); command(view, "Light", "theme:light"); command(view, "Dark", "theme:dark"); command(view, "Auto", "theme:auto"); view.addItem(.separator()); item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", modifiers: [.command, .control])
+        command(view, "Toggle Sidebar", "sidebar", "l", modifiers: [.command, .shift]); command(view, "Document Outline", "outline"); command(view, "Source Mode", "source", "/"); view.addItem(.separator()); command(view, "Focus Mode", "focus", "f", modifiers: [.command, .shift]); command(view, "Typewriter Mode", "typewriter"); view.addItem(.separator()); item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", modifiers: [.command, .control])
         let window = menu("Window"); item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"); item(window, "Zoom", #selector(NSWindow.performZoom(_:))); window.addItem(.separator()); item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:))); NSApp?.windowsMenu = window
         return bar
     }

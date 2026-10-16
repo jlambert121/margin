@@ -177,7 +177,68 @@ final class OpenRequestController: DocumentController {
             try expect(controller.documents.count == 1, "Recovery added a duplicate alongside a restored document")
             try expect(try recoveryStore.readAll().drafts.isEmpty, "An already-saved recovery was kept")
         }
+        let settingsSuite = "margin-settings-tests-\(UUID().uuidString)"
+        let settingsDefaults = UserDefaults(suiteName: settingsSuite)!
+        defer { settingsDefaults.removePersistentDomain(forName: settingsSuite) }
+        test("Settings default to Auto appearance and the Night icon, and persist choices") {
+            let settings = Settings(defaults: settingsDefaults)
+            try expect(settings.appearance == .auto && settings.appIcon == .night, "Unexpected default settings")
+            settings.appearance = .dark; settings.appIcon = .serif
+            let reloaded = Settings(defaults: settingsDefaults)
+            try expect(reloaded.appearance == .dark && reloaded.appIcon == .serif, "Settings did not persist")
+            settingsDefaults.set("missing", forKey: "appIcon")
+            try expect(reloaded.appIcon == .night, "Unknown icon did not fall back to Night")
+            settingsDefaults.removePersistentDomain(forName: settingsSuite)
+        }
+        test("Every icon choice is bundled and only Night uses the bundle icon") {
+            for choice in AppIconChoice.allCases { try expect(choice.image != nil, "Missing bundled icon: \(choice.rawValue)") }
+            try expect(AppIconChoice.night.dockImage == nil, "Night should restore the bundle icon")
+            try expect(AppIconChoice.allCases.filter { $0 != .night }.allSatisfy { $0.dockImage != nil }, "A choice has no Dock image")
+        }
+        test("Settings is in the app menu and appearance is no longer in View") {
+            let bar = delegate.makeMenu()
+            let app = bar.items.first?.submenu
+            let item = app?.items.first(where: { $0.action == #selector(AppDelegate.showSettings(_:)) })
+            try expect(item?.keyEquivalent == "," && item?.keyEquivalentModifierMask == [.command], "Settings… is not on ⌘,")
+            let view = bar.items.first(where: { $0.submenu?.title == "View" })?.submenu
+            try expect(view?.items.contains(where: { ["Light", "Dark", "Auto"].contains($0.title) }) == false, "View still lists appearance choices")
+        }
+        test("Settings window choices update the stored settings") {
+            let settings = Settings(defaults: settingsDefaults)
+            var changes = 0
+            let window = SettingsWindowController(settings: settings) { changes += 1 }
+            try expect(window.iconTiles.count == AppIconChoice.allCases.count, "Not every icon is offered")
+            window.appearanceControl.selectedSegment = AppearanceChoice.allCases.firstIndex(of: .light)!
+            window.appearanceChanged(window.appearanceControl)
+            let quote = NSButton(); quote.tag = AppIconChoice.allCases.firstIndex(of: .quote)!
+            window.iconChosen(quote)
+            try expect(settings.appearance == .light && settings.appIcon == .quote && changes == 2, "Settings window did not apply choices")
+            try expect(window.iconTiles[.quote]?.fillColor != .clear && window.iconTiles[.night]?.fillColor == .clear, "Selection highlight is wrong")
+            settingsDefaults.removePersistentDomain(forName: settingsSuite)
+        }
         if application != nil {
+        test("Appearance setting reaches the app and a loaded editor") {
+            let settings = Settings(defaults: settingsDefaults)
+            let themed = AppDelegate(controller: controller, recoveryStore: recoveryStore, settings: settings)
+            let original = application?.delegate
+            application?.delegate = themed
+            defer { application?.delegate = original; settingsDefaults.removePersistentDomain(forName: settingsSuite); delegate.applySettings() }
+            settings.appearance = .dark; settings.appIcon = .ruled
+            let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            doc.recoveryStore = recoveryStore
+            controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+            defer { doc.close() }
+            themed.applySettings()
+            try expect(application?.appearance?.name == .darkAqua, "App appearance is not dark")
+            try expect(application?.applicationIconImage !== NSImage(named: NSImage.applicationIconName), "Dock icon was not replaced")
+            guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editor.canSynchronize && !editor.webView.isHidden }
+            var bodyTheme: String?
+            func poll() { editor.webView.evaluateJavaScript("document.body.dataset.theme") { result, _ in bodyTheme = result as? String } }
+            try waitUntil { poll(); return bodyTheme == "dark" }
+            settings.appearance = .light; themed.applySettings()
+            try waitUntil { poll(); return bodyTheme == "light" }
+        }
         test("Launch without a file registers and shows an editor window") {
             delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
             delegate.applicationDidFinishRestoringWindows(restored)

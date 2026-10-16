@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build/module-cache
-swift -module-cache-path build/module-cache scripts/make-icon.swift build/AppIcon.iconset
+swift -module-cache-path build/module-cache scripts/make-icon.swift build/AppIcon.iconset Resources/Icons
 python3 - <<'PY'
 from pathlib import Path
 import struct

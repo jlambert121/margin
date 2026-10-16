@@ -8,5 +8,6 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/Welcome.md "$APP/Contents/Resources/Welcome.md"
 rsync -a --delete web/ "$APP/Contents/Resources/web/"
 if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"; fi
+rsync -a --delete Resources/Icons/ "$APP/Contents/Resources/Icons/"
 codesign --force --deep --sign - "$APP"
 printf 'Built %s\n' "$APP"

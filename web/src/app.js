@@ -239,19 +239,12 @@
     const dark = selectedTheme === 'dark' || (selectedTheme === 'auto' && systemAppearance.matches);
     document.body.dataset.theme = dark ? 'dark' : 'light';
     $('.toastui-editor-defaultUI').classList.toggle('toastui-editor-dark', dark);
-    document.querySelectorAll('button[data-theme]').forEach(button => {
-      button.setAttribute('aria-pressed', String(button.dataset.theme === selectedTheme));
-    });
   }
   systemAppearance.addEventListener('change', applyTheme);
+  // The native app owns the appearance setting and sends it after each load.
   function theme(name) {
-    if (!['light', 'dark', 'auto'].includes(name)) name = 'auto';
-    selectedTheme = name;
+    selectedTheme = ['light', 'dark', 'auto'].includes(name) ? name : 'auto';
     applyTheme();
-    try { localStorage.setItem('margin-theme', name); }
-    catch { toast('The theme preference could not be saved.'); }
-    closeMenus();
-    if (native) post('appearance', { theme: name });
   }
   function insertDialog(kind) {
     insertKind = kind;
@@ -324,7 +317,6 @@
       if (['exportHTML', 'print'].includes(action)) command(action); else post(action);
     }
     const formatButton = event.target.closest('[data-format]'); if (formatButton) format(formatButton.dataset.format);
-    const themeButton = event.target.closest('[data-theme]'); if (themeButton?.tagName === 'BUTTON') theme(themeButton.dataset.theme);
     if (!event.target.closest('.popover,#format-button,#more-button')) closeMenus();
     const link = event.target.closest('.toastui-editor-contents a');
     if (link) {
@@ -376,10 +368,7 @@
   if (native) {
     const base = document.createElement('base'); base.href = 'markdown-asset://local/'; document.head.append(base);
   }
-  let savedTheme = 'auto';
-  try { savedTheme = localStorage.getItem('margin-theme') || 'auto'; }
-  catch { toast('The saved theme could not be read.'); }
-  theme(savedTheme);
+  applyTheme();
   renderFiles(); refresh();
   if (native) post('ready');
 })();

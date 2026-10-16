@@ -21,7 +21,8 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 - Folder tree, file filtering, and a clickable document outline.
 - Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling, with multiple document windows.
 - Search, word and character counts, line counts, and estimated reading time.
-- Light, Dark, and Auto appearance (follows macOS), plus paragraph focus and typewriter scrolling in live preview.
+- Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
+- Paragraph focus and typewriter scrolling in live preview.
 - HTML export and native printing with Save as PDF.
 - Local images underneath the Markdown file's directory. Dropped or pasted image files are embedded as data URLs; no upload service is used.
 - Bundled editor and sanitizer assets; no analytics or network dependency at launch. Images with remote URLs load from their original hosts.
@@ -40,7 +41,7 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 | ⇧⌘L | Toggle sidebar |
 | ⌘P | Print / Save as PDF |
 
-Command-click links to open them. Clicking a file in the sidebar switches the current document, using native document handling for unsaved changes. Opening through File → Open creates a separate document window. The last workspace and chosen theme are remembered.
+Command-click links to open them. Clicking a file in the sidebar switches the current document, using native document handling for unsaved changes. Opening through File → Open creates a separate document window. The last workspace, appearance, and app icon are remembered.
 
 ## Implementation
 
@@ -48,10 +49,10 @@ Command-click links to open them. Clicking a file in the sidebar switches the cu
 - `web/src/app.js`: editor integration, bridge messages, source buffer, navigation, search, formatting, and view state.
 - `web/src/style.css`: writing typography, application layout, themes, and print styles.
 - `web/vendor/`: pinned TOAST UI Editor 3.2.2 and DOMPurify 3.4.17, with upstream license files. The current sanitizer overrides the editor's bundled legacy sanitizer.
-- `Resources/`: editable welcome document, Info.plist, and original app icon.
+- `Resources/`: editable welcome document, Info.plist, the bundle icon, and the icon choices in `Resources/Icons/`.
 - `scripts/build.sh`: compiles Swift, copies web assets into the app bundle, and applies an ad hoc signature.
 
-For Swift changes, rebuild the app. Web files are copied during every build. Run `./scripts/make-icon.sh` to regenerate the icon from the Core Graphics source.
+For Swift changes, rebuild the app. Web files are copied during every build. Run `./scripts/make-icon.sh` to regenerate the bundle icon and the icon choices from the Core Graphics source.
 
 ## Verification
 
