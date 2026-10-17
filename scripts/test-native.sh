@@ -18,4 +18,6 @@ with open(sys.argv[1], 'wb') as target:
     plistlib.dump(info, target)
 PY
 swiftc -D TESTING -parse-as-library -module-name Margin -module-cache-path "$MODULE_CACHE" -framework Cocoa -framework WebKit Sources/*.swift tests/NativeIntegrationTests.swift -o "$TEST_APP/Contents/MacOS/NativeIntegrationTests"
-"$TEST_APP/Contents/MacOS/NativeIntegrationTests" "$@"
+# The runner always ends with exit(), so AppKit would restore whatever windows
+# a failed run left open into every later run.
+"$TEST_APP/Contents/MacOS/NativeIntegrationTests" -ApplePersistenceIgnoreState YES "$@"

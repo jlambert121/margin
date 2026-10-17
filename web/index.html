@@ -31,6 +31,8 @@
     <div class="toolbar-right"><button id="format-button" class="icon-button" title="Formatting options" aria-label="Formatting options" aria-expanded="false">Aa</button><button id="source-button" class="icon-button" title="Toggle source mode (⌘/)" aria-label="Toggle source mode" aria-pressed="false">&lt;/&gt;</button><button id="more-button" class="icon-button" title="View options" aria-label="View options" aria-expanded="false">•••</button></div>
   </header>
   <div id="find-bar" hidden><input id="find-input" type="search" placeholder="Find in document…" aria-label="Find in document"><span id="find-result"></span><button id="find-prev" aria-label="Previous match">↑</button><button id="find-next" aria-label="Next match">↓</button><button id="find-close" aria-label="Close find">×</button></div>
+  <div id="disk-banner" class="notice-bar" role="alert" hidden><span class="notice-text">This file changed on disk while you have unsaved changes.</span><button id="disk-reload">Reload</button><button id="disk-keep-mine">Keep mine</button><button id="disk-compare" class="primary">Compare</button></div>
+  <div id="compare-bar" class="notice-bar" hidden><span id="compare-status" class="notice-text"></span><button id="compare-use-disk">Use disk version for all</button><button id="compare-keep-mine">Keep mine for all</button><button id="compare-cancel">Cancel</button></div>
   <div id="editor"></div>
   <footer id="statusbar"><span id="save-status">Ready to write</span><div><button id="word-count" title="Document statistics">0 words</button><span id="reading-time">1 min read</span><span class="status-divider"></span><span>Markdown</span><span class="encoding">UTF-8</span></div></footer>
 </main>

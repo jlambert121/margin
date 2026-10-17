@@ -21,6 +21,7 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 - Source mode (⌘/) shows the same document with all syntax visible.
 - Open files list, folder tree, file filtering, and a clickable document outline.
 - Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling. Documents open as native macOS tabs and can be dragged out into their own windows.
+- Files changed by another application reload automatically when there are no unsaved changes. With unsaved changes, a banner offers Reload, Keep mine, or Compare, which shows each disk change inline in source mode to keep or take one at a time or all at once.
 - Search, word and character counts, line counts, and estimated reading time.
 - Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
 - Typewriter scrolling.
@@ -60,7 +61,7 @@ For Swift changes, rebuild the app. Web files are copied during every build. Run
 
 ## Verification
 
-The application builds with the installed Swift compiler. The default suite has 53 checks: fourteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, twelve document/filesystem/session checks, and twenty-seven editor checks in WebKit: twenty behavior checks and seven native bridge checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, text from the app not being reported back as edits, undo keys reaching native undo, the open-files list, and color scheme changes. The WebKit checks cover live preview rendering, markers appearing at the cursor, typed Markdown rendering, task checkboxes, grid table editing (cells, keyboard movement, the table menu, and Edit as Markdown), source mode, formatting commands, outline, search, sanitizing, export and print rendering, and that the page raises no uncaught errors. The bridge checks load the page in native mode against a recording message handler (`tests/bridge.setup.js`).
+The application builds with the installed Swift compiler. The default suite has 62 checks: fourteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, sixteen document/filesystem/session/disk-change checks, and thirty-two editor checks in WebKit: twenty behavior checks and twelve native bridge checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Disk-change tests cover reloading, keeping edits while periodic autosave waits, Keep mine, Reload, and matching or unreadable disk versions. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, text from the app not being reported back as edits, undo keys reaching native undo, the open-files list, color scheme changes, the disk-change banner, and comparing with the disk version. The WebKit checks cover live preview rendering, markers appearing at the cursor, typed Markdown rendering, task checkboxes, grid table editing (cells, keyboard movement, the table menu, and Edit as Markdown), source mode, formatting commands, outline, search, sanitizing, export and print rendering, and that the page raises no uncaught errors. The bridge checks load the page in native mode against a recording message handler (`tests/bridge.setup.js`).
 
 With Node.js installed (used only for syntax checks; no packages are needed):
 
@@ -70,7 +71,7 @@ npm test
 
 Building and running the app do not require Node.js or npm.
 
-For the 24 desktop checks — visible windows on launch and file opening, tabs and the open-files list, Markdown drops, ordered opens, editor undo, appearance and Dock icon, window frames, the native Open → edit → Save As → Save → reopen flow, menu validation, and a simulated editor-process failure followed by retry — run this in a normal macOS desktop session:
+For the 25 desktop checks — visible windows on launch and file opening, tabs and the open-files list, Markdown drops, ordered opens, editor undo, appearance and Dock icon, window frames, the native Open → edit → Save As → Save → reopen flow, files changed by another application, menu validation, and a simulated editor-process failure followed by retry — run this in a normal macOS desktop session:
 
 ```sh
 npm run test:native
@@ -97,6 +98,8 @@ The app reports editor startup failures, failed JavaScript commands, uncaught Ja
 Edits are sent to the native document as they happen. Recovery copies are written atomically on a background queue, at most once per 750-millisecond interval during continuous typing, in `~/Library/Application Support/Margin/Recovery`. A detected editor failure requests an immediate checkpoint. Recovery-write failures are reported. This supplements native autosaving and the usual Save/Don't Save/Cancel handling. In-flight editor messages and edits since the last completed disk write can still be lost in a crash or power failure.
 
 On launch, recovery copies open as unsaved documents named `Recovered …`, without overwriting the original files. Identical documents already restored are not duplicated. Save As lets you choose the destination. Successful saves, Revert, and intentional document closes remove the corresponding recovery copy. Damaged recovery files are reported and retained for inspection.
+
+When another application changes an open file, a document without unsaved changes reloads and shows "Reloaded from disk". One with unsaved changes keeps its text and shows a banner. Reload asks before discarding the edits. Keep mine saves the edits over the disk version without AppKit's "changed by another application" alert, which still appears if the file changes again before saving. Compare switches to source mode and shows the disk version above each changed part of your text; resolving the last change, or choosing Use disk version for all or Keep mine for all, saves the result. Cancel leaves the edits unsaved and the banner in place. A newer disk version during a comparison updates it in place. While the banner is unresolved, periodic autosave waits; closing or quitting still autosaves and shows AppKit's alert. macOS does not report another application's write that lands within about half a second of Margin's own save, so the app checks the file again 1.5 seconds after each save. Reloading clears the undo history.
 
 Save and Save As read a current editor snapshot before proceeding when the editor is available. Load identifiers and edit revisions prevent delayed messages from overwriting newer text. The native failure view explicitly saves only the last received version displayed there.
 

@@ -10,6 +10,11 @@
   --accent:#537460;
   --select:#e6ece5;
   --code:#f5f6f3;
+  --notice:#f8f4e6;
+  --diff-disk:#f7e6e2;
+  --diff-disk-mark:#d9786a;
+  --diff-mine:#e5efe3;
+  --diff-mine-mark:#6fa067;
   font-family:-apple-system,BlinkMacSystemFont,sans-serif;
   font-size:13px
 }
@@ -766,6 +771,77 @@ main {
   padding:4px 8px
 }
 
+.notice-bar {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 22px;
+  border-bottom:1px solid var(--line);
+  background:var(--notice);
+  font-size:12px
+}
+
+.notice-text {
+  flex:1;
+  min-width:0
+}
+
+.notice-bar button {
+  padding:5px 11px;
+  border:1px solid var(--line);
+  background:var(--paper);
+  white-space:nowrap
+}
+
+.notice-bar button.primary {
+  border-color:var(--accent);
+  background:var(--accent);
+  color:var(--paper)
+}
+
+#editor .cm-changedLine {
+  background:var(--diff-mine)
+}
+
+#editor .cm-changedText {
+  background:linear-gradient(var(--diff-mine-mark),var(--diff-mine-mark)) bottom/100% 2px no-repeat
+}
+
+#editor .cm-deletedChunk {
+  position:relative;
+  background:var(--diff-disk);
+  padding:2px 0 2px 6px
+}
+
+#editor .cm-deletedChunk .cm-deletedText {
+  background:linear-gradient(var(--diff-disk-mark),var(--diff-disk-mark)) bottom/100% 2px no-repeat
+}
+
+#editor .cm-deletedChunk .cm-chunkButtons {
+  top:3px;
+  inset-inline-end:6px;
+  display:flex;
+  gap:4px;
+  z-index:1
+}
+
+#editor .cm-deletedChunk button {
+  margin:0;
+  padding:1px 8px;
+  border:1px solid var(--line);
+  background:var(--paper);
+  color:var(--text);
+  font:11px/1.7 -apple-system,BlinkMacSystemFont,sans-serif
+}
+
+#editor .cm-deletedChunk button[name=reject] {
+  order:-1
+}
+
+#editor .cm-deletedChunk button:hover {
+  background:var(--hover)
+}
+
 #toast {
   position:fixed;
   bottom:52px;
@@ -858,7 +934,12 @@ body[data-theme=dark] {
   --hover:#303831;
   --select:#344337;
   --code:#292f2a;
-  --accent:#a2b99a
+  --accent:#a2b99a;
+  --notice:#2e2c23;
+  --diff-disk:#3a2926;
+  --diff-disk-mark:#c7766a;
+  --diff-mine:#26362a;
+  --diff-mine-mark:#7fae76
 }
 
 @media(max-width:850px) {

@@ -113,6 +113,87 @@ import UniformTypeIdentifiers
             try expect(session.acceptChange(token: next, revision: 2), "Latest snapshot was rejected")
             try expect(!session.acceptChange(token: next, revision: 1), "Delayed older text could overwrite the latest snapshot")
         }
+        // Disk changes are written with a later date than NSDocument recorded, as another application's save would be.
+        var nextDiskDate = Date().addingTimeInterval(5)
+        func writeElsewhere(_ data: Data, to url: URL) throws {
+            try data.write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: nextDiskDate], ofItemAtPath: url.path)
+            nextDiskDate.addTimeInterval(5)
+        }
+        func diskText(_ url: URL) throws -> String { try String(contentsOf: url, encoding: .utf8) }
+        func wait(_ message: String, until finished: () -> Bool) throws {
+            let limit = Date().addingTimeInterval(5)
+            while !finished() && Date() < limit { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            try expect(finished(), message)
+        }
+        func checkDisk(_ doc: MarkdownDocument) throws {
+            var finished = false
+            doc.checkDisk { finished = true }
+            try wait("The disk check did not finish") { finished }
+        }
+        func openFile(_ name: String, _ text: String) throws -> (MarkdownDocument, URL) {
+            let url = root.appendingPathComponent(name)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            let doc = try MarkdownDocument(contentsOf: url, ofType: markdownType)
+            doc.recoveryStore = recoveryStore
+            return (doc, url)
+        }
+        func edit(_ doc: MarkdownDocument, _ text: String) throws {
+            doc.undoManager?.beginUndoGrouping(); doc.edited(text); doc.undoManager?.endUndoGrouping()
+            try wait("The edit did not mark the document edited") { doc.isDocumentEdited }
+        }
+        test("A clean document reloads when another application changes its file") {
+            let (doc, url) = try openFile("Reload.md", "# Original\n")
+            defer { doc.close() }
+            try writeElsewhere(Data("# Changed elsewhere\n".utf8), to: url)
+            try checkDisk(doc)
+            try expect(doc.text == "# Changed elsewhere\n" && !doc.isDocumentEdited && doc.diskConflict == nil, "The clean document did not reload")
+        }
+        test("Unsaved edits stay when the file changes, periodic autosave waits, and Keep mine saves them") {
+            let (doc, url) = try openFile("Keep mine.md", "# Original\n")
+            defer { doc.close() }
+            try edit(doc, "# My edits\n")
+            try writeElsewhere(Data("# Theirs\n".utf8), to: url)
+            try checkDisk(doc)
+            try expect(doc.text == "# My edits\n" && doc.isDocumentEdited, "The disk version replaced unsaved edits")
+            try expect(doc.diskConflict?.text == "# Theirs\n", "The disk version was not offered")
+            try writeElsewhere(Data("# Theirs, again\n".utf8), to: url)
+            try checkDisk(doc)
+            try expect(doc.diskConflict?.text == "# Theirs, again\n", "A newer disk version did not replace the offered one")
+            var autosaveError: Error?
+            var autosaved = false
+            doc.autosave(withImplicitCancellability: true) { autosaveError = $0; autosaved = true }
+            try wait("Autosave did not finish") { autosaved }
+            try expect((autosaveError as? CocoaError)?.code == .userCancelled && diskText(url) == "# Theirs, again\n", "Periodic autosave ran while the disk version was unresolved")
+            doc.keepMine()
+            try wait("Keep mine did not save") { !doc.isDocumentEdited }
+            try expect(try diskText(url) == "# My edits\n" && doc.diskConflict == nil, "Keep mine did not write the edits over the disk version")
+        }
+        test("Reload replaces unsaved edits with the disk version") {
+            let (doc, url) = try openFile("Discard.md", "# Original\n")
+            defer { doc.close() }
+            try edit(doc, "# Discard these\n")
+            try writeElsewhere(Data("# Disk version\n".utf8), to: url)
+            try checkDisk(doc)
+            doc.reloadFromDisk()
+            try expect(doc.text == "# Disk version\n" && !doc.isDocumentEdited && doc.diskConflict == nil, "Reload did not take the disk version")
+            try expect(try recoveryStore.readAll().drafts.allSatisfy { $0.id != doc.recoveryID }, "Reload left a recovery copy of the discarded edits")
+        }
+        test("A disk version matching the edits, or unreadable, leaves the document alone") {
+            let (doc, url) = try openFile("Same.md", "# Original\n")
+            defer { doc.close() }
+            var errors: [Error] = []
+            doc.onDiskError = { errors.append($0) }
+            try edit(doc, "# Same\n")
+            try writeElsewhere(Data("# Same\n".utf8), to: url)
+            try checkDisk(doc)
+            let date = try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            try expect(doc.diskConflict == nil && doc.fileModificationDate == date, "A matching disk version was treated as a conflict")
+            try writeElsewhere(Data([0xff, 0xfe, 0xff]), to: url)
+            try checkDisk(doc)
+            try checkDisk(doc)
+            try expect(errors.count == 1 && doc.text == "# Same\n" && doc.diskConflict == nil, "An unreadable disk version was not reported once: \(errors.count)")
+        }
         test("Local images load while traversal, symlinks, and non-images are rejected") {
             let images = root.appendingPathComponent("images")
             try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)

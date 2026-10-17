@@ -12,6 +12,12 @@ extension Notification.Name {
     static let openFilesChanged = Notification.Name("Margin.openFilesChanged")
 }
 
+// A version of the file that another application wrote while the document had unsaved edits.
+struct DiskVersion: Equatable {
+    let text: String
+    let date: Date
+}
+
 // Info.plist uses this Objective-C name. An unqualified Swift class name does
 // not resolve through NSClassFromString, so AppKit otherwise disables Open.
 @objc(MarkdownDocument)
@@ -24,6 +30,12 @@ final class MarkdownDocument: NSDocument {
     var recoveredOriginalURL: URL?
     var isWelcome = false
     var onRecoveryError: ((Error) -> Void)?
+    var onDiskError: ((Error) -> Void)?
+    private(set) var diskConflict: DiskVersion?
+    private var unreadableDiskDate: Date?
+    private var diskCheck: DispatchWorkItem?
+    private var reverting = false
+    private var revertNotice: String?
     private var checkpoint: DispatchWorkItem?
     private var uncountedEdit = false
     private var savesWaitingForEdit: [() -> Void] = []
@@ -81,16 +93,27 @@ final class MarkdownDocument: NSDocument {
         try data(ofType: typeName).write(to: url, options: .atomic)
     }
     override func read(from data: Data, ofType typeName: String) throws {
+        text = try Self.decode(data)
+        if !reverting { editorController?.loadDocument() }
+    }
+    static func decode(_ data: Data) throws -> String {
         guard let decoded = String(data: data, encoding: .utf8) else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadInapplicableStringEncodingError,
                           userInfo: [NSLocalizedDescriptionKey: "This file is not UTF-8 text. Convert it to UTF-8 before opening it."])
         }
-        text = decoded
-        editorController?.loadDocument()
+        return decoded
     }
+    // NSDocument clears the edited state only after reading, so the editor
+    // loads the reverted text once that state is final.
     override func revert(toContentsOf url: URL, ofType typeName: String) throws {
-        try super.revert(toContentsOf: url, ofType: typeName)
+        let conflict = diskConflict
+        diskConflict = nil
+        reverting = true
+        defer { reverting = false }
+        do { try super.revert(toContentsOf: url, ofType: typeName) }
+        catch { diskConflict = conflict; editorController?.loadDocument(); throw error }
         clearRecovery()
+        editorController?.loadDocument(notice: revertNotice)
     }
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) throws {
         let savedText = text
@@ -98,6 +121,10 @@ final class MarkdownDocument: NSDocument {
         if saveOperation != .saveToOperation && saveOperation != .autosaveElsewhereOperation {
             if text == savedText { clearRecovery() }
             else { flushRecovery() }
+            clearDiskConflict()
+            // macOS does not report another application's write that lands
+            // within about half a second of this one, so look once it has passed.
+            scheduleDiskCheck(after: 1.5)
             editorController?.loadMetadata()
         }
     }
@@ -163,7 +190,129 @@ final class MarkdownDocument: NSDocument {
         // Normal document closing has already handled Save / Don't Save. A
         // process crash never reaches here, so its recovery copy remains.
         clearRecovery()
+        diskCheck?.cancel(); diskCheck = nil
         super.close()
+    }
+    // A periodic autosave would raise AppKit's conflict alert over the editor's
+    // own choice. Closing and quitting still autosave and ask through AppKit.
+    override func autosave(withImplicitCancellability autosavingIsImplicitlyCancellable: Bool, completionHandler: @escaping (Error?) -> Void) {
+        if autosavingIsImplicitlyCancellable, diskConflict != nil { completionHandler(CocoaError(.userCancelled)); return }
+        super.autosave(withImplicitCancellability: autosavingIsImplicitlyCancellable, completionHandler: completionHandler)
+    }
+    // NSDocument hears when another application changes the file, but only
+    // refuses the next save. A clean document reloads; an edited one keeps its
+    // text while the editor offers the version on disk.
+    override func presentedItemDidChange() {
+        super.presentedItemDidChange()
+        DispatchQueue.main.async { [weak self] in self?.scheduleDiskCheck() }
+    }
+    // Formatters and checkouts can write a file several times in a row.
+    private func scheduleDiskCheck(after delay: TimeInterval = 0.2) {
+        diskCheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.checkDisk() }
+        diskCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+    func checkDisk(completion: @escaping () -> Void = {}) {
+        diskCheck = nil
+        // Waits for saves and AppKit's own sheets about this file.
+        performActivity(withSynchronousWaiting: false) { [weak self] activityCompletion in
+            let finish = { activityCompletion(); completion() }
+            guard let self else { finish(); return }
+            // Edits still on their way from the editor decide whether reloading is safe.
+            guard let editorController = self.editorController, editorController.canSynchronize else { self.applyDiskChange(); finish(); return }
+            editorController.synchronize { synchronized in
+                if synchronized { self.applyDiskChange() }
+                finish()
+            }
+        }
+    }
+    private func applyDiskChange() {
+        // A new URL, because URL caches resource values.
+        guard let url = fileURL, fileType != nil,
+              let date = try? URL(fileURLWithPath: url.path).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+              date != fileModificationDate, date != diskConflict?.date, date != unreadableDiskDate else { return }
+        let diskText: String
+        do { diskText = try readDiskText(url) }
+        catch {
+            unreadableDiskDate = date
+            reportDiskError(NSError(domain: "Margin.Disk", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "“\(editorName)” changed on disk, but the new version could not be read.",
+                NSLocalizedRecoverySuggestionErrorKey: "The editor still shows the earlier text. \(error.localizedDescription)",
+                NSUnderlyingErrorKey: error
+            ]))
+            return
+        }
+        if diskText == text {
+            fileModificationDate = date
+            clearDiskConflict()
+        } else if !isDocumentEdited {
+            reloadFromDisk()
+        } else {
+            diskConflict = DiskVersion(text: diskText, date: date)
+            editorController?.send("diskChanged", diskText)
+        }
+    }
+    private func readDiskText(_ url: URL) throws -> String {
+        var coordinationError: NSError?
+        var result: Result<Data, Error> = .failure(CocoaError(.fileReadUnknown))
+        NSFileCoordinator(filePresenter: self).coordinate(readingItemAt: url, options: [], error: &coordinationError) { url in
+            result = Result { try Data(contentsOf: url) }
+        }
+        if let coordinationError { throw coordinationError }
+        return try Self.decode(result.get())
+    }
+    private func reportDiskError(_ error: Error) {
+        if let onDiskError { onDiskError(error) }
+        else if let window = windowForSheet { presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil) }
+        else { presentError(error) }
+    }
+    func reloadFromDisk() {
+        guard let url = fileURL, let fileType else { return }
+        revertNotice = "Reloaded from disk"
+        defer { revertNotice = nil }
+        do { try revert(toContentsOf: url, ofType: fileType) }
+        catch { reportDiskError(error) }
+    }
+    func confirmReloadFromDisk() {
+        guard diskConflict != nil else { return }
+        performActivity(withSynchronousWaiting: false) { [weak self] activityCompletion in
+            guard let self, let window = self.windowForSheet else { activityCompletion(); return }
+            let alert = NSAlert()
+            alert.messageText = "Reload “\(self.editorName)” from disk?"
+            alert.informativeText = "Your unsaved changes will be discarded and replaced by the version on disk."
+            alert.addButton(withTitle: "Reload")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn { self.reloadFromDisk() }
+                activityCompletion()
+            }
+        }
+    }
+    // Saving over the disk version is the choice the user just made, so
+    // AppKit's check for a newer file must not ask again. A newer change still does.
+    func keepMine() {
+        guard diskConflict != nil else { return }
+        let save = { [weak self] in
+            guard let self, let conflict = self.diskConflict else { return }
+            self.fileModificationDate = conflict.date
+            self.save(withDelegate: self, didSave: #selector(self.document(_:didKeepMine:contextInfo:)), contextInfo: nil)
+        }
+        guard let editorController, editorController.canSynchronize else { save(); return }
+        editorController.synchronize { [weak self] synchronized in
+            if synchronized { save() } else { self?.resendDiskConflict() }
+        }
+    }
+    @objc private func document(_ document: NSDocument, didKeepMine didSave: Bool, contextInfo: UnsafeMutableRawPointer?) {
+        if !didSave { resendDiskConflict() }
+    }
+    private func resendDiskConflict() {
+        if let diskConflict { editorController?.send("diskChanged", diskConflict.text) }
+    }
+    private func clearDiskConflict() {
+        guard diskConflict != nil else { return }
+        diskConflict = nil
+        editorController?.send("diskChanged", nil)
     }
     // NSDocument counts an undo-registered edit with updateChangeCount(.changeDone)
     // when the edit's undo group closes, possibly later still while it checks
@@ -451,7 +600,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             evaluate("window.app.command(...\(arguments))")
         } catch { reportEditorError("An editor command could not be prepared: \(error.localizedDescription)") }
     }
-    func loadDocument() {
+    func loadDocument(notice: String? = nil) {
         guard ready else { return }
         webView.isHidden = true
         let token = session.beginLoad()
@@ -459,6 +608,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         assets.root = (doc.fileURL ?? doc.recoveredOriginalURL)?.deletingLastPathComponent()
         var payload: [String: Any] = ["text": doc.text, "token": token, "name": doc.editorName, "path": doc.fileURL?.path ?? "", "modified": doc.isDocumentEdited]
         if let folder = app?.folderPayload() { payload["folder"] = folder }
+        if let notice { payload["notice"] = notice }
         payload["openFiles"] = openFilesPayload()
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
@@ -487,6 +637,8 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             session.acknowledge(token)
             if session.isLoaded {
                 loadTimeout?.cancel(); loadTimeout = nil; webView.isHidden = false
+                // Commands sent while the load was pending were dropped.
+                send("diskChanged", doc.diskConflict?.text)
             }
         case "changed":
             if let token = body["token"] as? String, let text = body["text"] as? String,
@@ -505,6 +657,8 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         case "openFolder": app?.openFolder(nil)
         case "refreshFolder": app?.refreshFolders()
         case "save": doc.save(nil)
+        case "diskReload": doc.confirmReloadFromDisk()
+        case "diskKeepMine": doc.keepMine()
         case "saveAs": doc.saveAs(nil)
         case "print": printDocument(nil)
         case "exportHTML": if let html = body["html"] as? String { exportHTML(html) }

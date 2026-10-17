@@ -503,6 +503,51 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let reopened = try controller.makeDocument(withContentsOf: destination, ofType: markdownType) as! MarkdownDocument
             try expect(reopened.text == doc.text, "Saved edits were lost after reopen")
         }
+        test("Another application's change reloads a clean file, and is offered beside unsaved edits") {
+            let url = root.appendingPathComponent("Watched.md")
+            try "# Watched\n".write(to: url, atomically: true, encoding: .utf8)
+            var opened: MarkdownDocument?
+            var finished = false
+            controller.openDocument(withContentsOf: url, display: true) { doc, _, _ in opened = doc as? MarkdownDocument; finished = true }
+            try waitUntil { finished }
+            guard let doc = opened, let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            doc.recoveryStore = recoveryStore
+            defer { doc.close() }
+            try waitUntil { editor.canSynchronize && !editor.webView.isHidden }
+            var result: Any?
+            func poll(_ script: String) -> Bool {
+                editor.webView.evaluateJavaScript(script) { value, _ in result = value }
+                return result as? Bool == true
+            }
+            @MainActor func run(_ script: String) throws {
+                var ran = false
+                editor.webView.evaluateJavaScript(script + "; true") { _, _ in ran = true }
+                try waitUntil { ran }
+                result = nil
+            }
+            try "# Changed elsewhere\n".write(to: url, atomically: true, encoding: .utf8)
+            try waitUntil { doc.text == "# Changed elsewhere\n" }
+            try waitUntil { poll("app.getMarkdown() === '# Changed elsewhere\\n' && document.querySelector('#toast').textContent === 'Reloaded from disk' && document.querySelector('#disk-banner').hidden") }
+            try run("app.view.dispatch({ changes: { from: app.view.state.doc.length, insert: 'My edit\\n' } })")
+            try waitUntil { doc.isDocumentEdited }
+            try "# Changed elsewhere\nTheir edit\n".write(to: url, atomically: true, encoding: .utf8)
+            try waitUntil { doc.diskConflict?.text == "# Changed elsewhere\nTheir edit\n" }
+            result = nil
+            try waitUntil { poll("!document.querySelector('#disk-banner').hidden && app.getMarkdown() === '# Changed elsewhere\\nMy edit\\n'") }
+            try run("document.querySelector('#disk-compare').click()")
+            try waitUntil { poll("app.isComparing() && document.querySelectorAll('.cm-deletedChunk').length === 1") }
+            try run("document.querySelector('#compare-keep-mine').click()")
+            try waitUntil { !doc.isDocumentEdited && doc.diskConflict == nil }
+            try expect(try String(contentsOf: url, encoding: .utf8) == "# Changed elsewhere\nMy edit\n", "Keep mine for all did not save the edits")
+            try waitUntil { poll("document.querySelector('#modified-dot').hidden && document.querySelector('#disk-banner').hidden") }
+            try run("app.view.dispatch({ changes: { from: 0, insert: 'Discard me\\n' } })")
+            try waitUntil { doc.isDocumentEdited }
+            try "# From disk\n".write(to: url, atomically: true, encoding: .utf8)
+            try waitUntil { doc.diskConflict != nil }
+            doc.reloadFromDisk()
+            result = nil
+            try waitUntil { poll("app.getMarkdown() === '# From disk\\n' && document.querySelector('#modified-dot').hidden && document.querySelector('#disk-banner').hidden") }
+        }
         } else {
             print("SKIP Full AppKit Open/Save and visible-menu checks require a desktop session: ./scripts/test-native.sh --ui")
         }
