@@ -381,8 +381,12 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             editor.webView.evaluateJavaScript("app.view.contentDOM.focus(); app.view.dispatch({ selection: { anchor: 0 } }); document.execCommand('insertText', false, 'typed '); 1") { _, _ in finished = true }
             try waitUntil { finished && doc.text != "# Start\n" && doc.undoManager?.canUndo == true }
             finished = false
+            var hidden = false
+            let visibility = editor.webView.observe(\.isHidden) { view, _ in hidden = hidden || view.isHidden }
+            defer { visibility.invalidate() }
             editor.webView.evaluateJavaScript("app.view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true })); 1") { _, _ in finished = true }
             try waitUntil { finished && doc.text == "# Start\n" }
+            try expect(!hidden, "Undo hid the editor while it reloaded the text")
             try expect(doc.undoManager?.canUndo == false, "WebKit editing steps reached the document's undo stack")
             try expect(!doc.isDocumentEdited, "Undoing the only edit left the document edited")
         }
@@ -544,7 +548,11 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { doc.isDocumentEdited }
             try "# From disk\n".write(to: url, atomically: true, encoding: .utf8)
             try waitUntil { doc.diskConflict != nil }
+            var hidden = false
+            let visibility = editor.webView.observe(\.isHidden) { view, _ in hidden = hidden || view.isHidden }
+            defer { visibility.invalidate() }
             doc.reloadFromDisk()
+            try expect(!hidden, "Reloading from disk hid the editor")
             result = nil
             try waitUntil { poll("app.getMarkdown() === '# From disk\\n' && document.querySelector('#modified-dot').hidden && document.querySelector('#disk-banner').hidden") }
         }

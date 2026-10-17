@@ -602,7 +602,9 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     }
     func loadDocument(notice: String? = nil) {
         guard ready else { return }
-        webView.isHidden = true
+        // Only the first load waits hidden. Later loads, such as undo and
+        // reloading from disk, change the text in place.
+        if !session.isLoaded { webView.isHidden = true }
         let token = session.beginLoad()
         armLoadTimeout()
         assets.root = (doc.fileURL ?? doc.recoveredOriginalURL)?.deletingLastPathComponent()
