@@ -22,7 +22,11 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 - Open files list, folder tree, file filtering, and a clickable document outline.
 - Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling. Documents open as native macOS tabs and can be dragged out into their own windows.
 - Files changed by another application reload automatically when there are no unsaved changes. With unsaved changes, a banner offers Reload, Keep mine, or Compare, which shows each disk change inline in source mode to keep or take one at a time or all at once.
-- Search, word and character counts, line counts, and estimated reading time.
+- Find and replace, optionally with regular expressions (`$1`, `$&`, and `$<name>` in replacements), and Go to Line (`line` or `line:column`; also opened by clicking the cursor position in the status bar).
+- Fenced code blocks are syntax highlighted in the language their info string names, for every language CodeMirror ships.
+- Brackets, double quotes, and backticks close as you type; typing `*`, `_`, or `~` over a selection wraps it.
+- Word and character counts, line counts, estimated reading time, and the cursor's line and column.
+- Text zoom for the document text, remembered across windows and launches.
 - Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
 - Typewriter scrolling.
 - HTML export and native printing with Save as PDF.
@@ -37,12 +41,14 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 | ⌘Z / ⇧⌘Z | Undo / Redo |
 | ⌘/ | Toggle Markdown source |
 | ⌘B / ⌘I / ⌘K | Bold / Italic / Link |
-| ⌘1–6 / ⌘0 | Heading / Body |
-| ⌘F | Find |
+| ⌘1–6 / ⌥⌘0 | Heading / Body |
+| ⌘F / ⌥⌘F | Find / Find and Replace |
+| ⌘L | Go to Line |
+| ⌘+ / ⌘− / ⌘0 | Zoom in / Zoom out / Actual size |
 | ⇧⌘L | Toggle sidebar |
 | ⌘P | Print / Save as PDF |
 
-Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open as tabs in the current window. The sidebar's Open Files section lists that window's tabs; click one to switch to it, or × to close it with the usual unsaved-changes handling. Dropped images are still embedded in the document. The last workspace, appearance, and app icon are remembered.
+Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open as tabs in the current window. The sidebar's Open Files section lists that window's tabs; click one to switch to it, or × to close it with the usual unsaved-changes handling. Dropped images are still embedded in the document. The last workspace, appearance, app icon, and text zoom are remembered.
 
 ## Implementation
 
@@ -105,7 +111,7 @@ Save and Save As read a current editor snapshot before proceeding when the edito
 
 ## First-version boundaries
 
-This implements the core Markdown editing workflow. Math typesetting, Mermaid rendering, advanced syntax highlighting, footnote tooling, custom CSS theme import, Pandoc formats, and iCloud coordination are not implemented. Code fences display their contents as plain code.
+This implements the core Markdown editing workflow. Math typesetting, Mermaid rendering, footnote tooling, custom CSS theme import, Pandoc formats, and iCloud coordination are not implemented. Code highlighting is in the editor only; HTML export and printing show code fences as plain code.
 
 The editor edits the Markdown text directly, so the file keeps exactly what was typed; nothing is reformatted. Syntax the live preview does not render, such as front matter, math, and HTML, stays visible as text. The app rejects files that are not UTF-8.
 

@@ -244,6 +244,27 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let view = bar.items.first(where: { $0.submenu?.title == "View" })?.submenu
             try expect(view?.items.contains(where: { ["Light", "Dark", "Auto"].contains($0.title) }) == false, "View still lists appearance choices")
         }
+        test("Text zoom steps, clamps, and persists") {
+            let settings = Settings(defaults: settingsDefaults)
+            try expect(settings.textZoom == 1, "Default text zoom is not 100%")
+            try expect(settings.zoomedIn() == 1.1 && settings.zoomedOut() == 0.9, "Zoom does not step from 100%")
+            settings.textZoom = 3
+            try expect(Settings(defaults: settingsDefaults).zoomedIn() == 3, "Zoom in went past the largest size")
+            settings.textZoom = 0.5
+            try expect(settings.zoomedOut() == 0.5, "Zoom out went past the smallest size")
+            settingsDefaults.set(40.0, forKey: "textZoom")
+            try expect(settings.textZoom == 3, "A stored zoom outside the range was not clamped")
+            settingsDefaults.removePersistentDomain(forName: settingsSuite)
+        }
+        test("Zoom, find and replace, and go to line have their shortcuts, and Body moved to Option-Command-0") {
+            let bar = delegate.makeMenu()
+            let items = bar.items.compactMap(\.submenu).flatMap(\.items)
+            func shortcut(_ title: String) -> (String, NSEvent.ModifierFlags)? { items.first { $0.title == title && !$0.isHidden }.map { ($0.keyEquivalent, $0.keyEquivalentModifierMask) } }
+            try expect(shortcut("Actual Size")! == ("0", [.command]) && shortcut("Zoom In")! == ("+", [.command]) && shortcut("Zoom Out")! == ("-", [.command]), "Zoom shortcuts are wrong")
+            try expect(items.contains { $0.title == "Zoom In" && $0.isHidden && $0.keyEquivalent == "=" && $0.allowsKeyEquivalentWhenHidden }, "⌘= does not zoom in")
+            try expect(shortcut("Body")! == ("0", [.command, .option]), "Body is not on ⌥⌘0")
+            try expect(shortcut("Find and Replace…")! == ("f", [.command, .option]) && shortcut("Go to Line…")! == ("l", [.command]), "Find and Replace or Go to Line shortcut is wrong")
+        }
         test("Settings window choices update the stored settings") {
             let settings = Settings(defaults: settingsDefaults)
             var changes = 0

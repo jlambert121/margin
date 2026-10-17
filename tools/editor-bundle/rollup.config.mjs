@@ -28,6 +28,6 @@ function bundledLicenses(file) {
 
 export default {
   input: 'tools/editor-bundle/entry.js',
-  output: { dir: 'web/vendor', entryFileNames: 'codemirror.bundle.js', format: 'iife', name: 'MarginEditor' },
+  output: { dir: 'web/vendor', entryFileNames: 'codemirror.bundle.js', format: 'iife', name: 'MarginEditor', inlineDynamicImports: true },
   plugins: [nodeResolve(), terser({ format: { comments: false } }), bundledLicenses('codemirror.bundle.LICENSES.txt')],
 };

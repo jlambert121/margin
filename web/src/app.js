@@ -12,7 +12,8 @@
   };
   const welcome = '# A little room to think.\n\nWelcome to **Margin**. A quiet place for your notes, ideas, and everything in between.\n\n## Just start writing\n\nYour words take shape as you type. Use Markdown shortcuts for headings, **bold**, *italics*, and lists — the formatting appears right here on the page.\n\n> The secret of getting ahead is getting started.\n\n## Make yourself at home\n\n- Open a Markdown file with **⌘O**\n- Browse a folder with **⇧⌘O**\n- Switch to source mode with **⌘/**\n- Save your work with **⌘S**\n\n### A few things to try\n\n- [x] Find a little space to write\n- [ ] Put an idea into words\n- [ ] Make something worth keeping\n\n## For the details\n\nCode, tables, links, and images all have a place here.\n\n```swift\nlet thought = "Something worth writing down."\nprint(thought)\n```\n\n| Shortcut | A small superpower |\n| --- | --- |\n| ⌘B | A little emphasis |\n| ⌘F | Find the right words |\n\n---\n\nTake your time. The page is yours.\n';
   const { EditorState, EditorSelection, ChangeSet, Compartment, Annotation, Prec, EditorView, keymap, placeholder, drawSelection,
-    defaultKeymap, indentWithTab, LanguageSupport, markdownLanguage, markdownKeymap, pasteURLAsLink, syntaxTree, ensureSyntaxTree,
+    defaultKeymap, indentWithTab, markdown, markdownLanguage, codeLanguages, syntaxTree, ensureSyntaxTree, syntaxHighlighting, languageDataProp,
+    tags, tagHighlighter, closeBrackets, closeBracketsKeymap,
     unifiedMergeView, getChunks, getOriginalDoc, originalDocChangeEffect } = MarginEditor;
   let raw = native ? '' : sessionStorage.getItem('margin-draft') ?? welcome;
   let sourceMode = false;
@@ -55,9 +56,38 @@
       if (text) view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length }, userEvent: 'input.paste' });
     });
   }
+  // GFM Markdown with list continuation on Enter, pasting a URL over text as a link,
+  // and fenced code parsed in the language its info string names.
+  const markdownSupport = markdown({ base: markdownLanguage, codeLanguages, completeHTMLTags: false });
+  // Single quotes are left out because they are usually apostrophes in prose.
+  const markdownBrackets = markdownSupport.language.data.of({ closeBrackets: { brackets: ['(', '[', '{', '"', '`'] } });
+  // Typing an emphasis marker over a selection wraps it rather than replacing it.
+  const wrapSelectionMarkers = EditorView.inputHandler.of((view, from, to, text) => {
+    if (!['*', '_', '~'].includes(text) || view.state.selection.ranges.every(range => range.empty)) return false;
+    view.dispatch(view.state.changeByRange(range => range.empty
+      ? { changes: { from: range.from, insert: text }, range: EditorSelection.cursor(range.from + 1) }
+      : { changes: [{ from: range.from, insert: text }, { from: range.to, insert: text }], range: EditorSelection.range(range.anchor + 1, range.head + 1) }), { userEvent: 'input.type' });
+    return true;
+  });
+  // Token classes for code inside fenced blocks. Markdown's own syntax is left to live preview.
+  const codeHighlighter = tagHighlighter([
+    { tag: [tags.keyword, tags.modifier, tags.self, tags.operatorKeyword, tags.controlKeyword, tags.definitionKeyword, tags.moduleKeyword], class: 'cm-code-keyword' },
+    { tag: [tags.string, tags.special(tags.string), tags.character, tags.attributeValue, tags.docString], class: 'cm-code-string' },
+    { tag: [tags.number, tags.bool, tags.null, tags.atom, tags.unit, tags.color], class: 'cm-code-number' },
+    { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], class: 'cm-code-comment' },
+    { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.macroName], class: 'cm-code-function' },
+    { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.variableName)], class: 'cm-code-type' },
+    { tag: [tags.propertyName, tags.attributeName, tags.labelName], class: 'cm-code-property' },
+    { tag: [tags.tagName, tags.angleBracket], class: 'cm-code-tag' },
+    { tag: [tags.regexp, tags.escape, tags.special(tags.variableName)], class: 'cm-code-regexp' },
+    { tag: [tags.meta, tags.annotation, tags.processingInstruction, tags.heading], class: 'cm-code-meta' },
+    { tag: tags.inserted, class: 'cm-code-inserted' },
+    { tag: tags.deleted, class: 'cm-code-deleted' },
+    { tag: tags.invalid, class: 'cm-code-invalid' },
+  ], { scope: type => type.prop(languageDataProp) !== markdownSupport.language.data });
   const imageFiles = list => [...(list ?? [])].filter(file => file.type.startsWith('image/'));
   function linkTarget(pos) {
-    for (let node = syntaxTree(view.state).resolveInner(pos, 1); node; node = node.parent) {
+    for (let node = syntaxTree(view.state).resolve(pos, 1); node; node = node.parent) {
       if (node.name === 'Link') { const url = node.getChild('URL'); return url ? view.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '') : null; }
       if (node.name === 'URL') return view.state.sliceDoc(node.from, node.to);
       if (node.name === 'Autolink') return view.state.sliceDoc(node.from + 1, node.to - 1);
@@ -67,19 +97,23 @@
   const view = new EditorView({
     parent: $('#editor'),
     state: EditorState.create({ doc: raw, extensions: [
-      // GFM Markdown with list continuation on Enter and pasting a URL over text as a link.
-      new LanguageSupport(markdownLanguage, [Prec.high(keymap.of(markdownKeymap)), pasteURLAsLink]),
+      markdownSupport,
+      markdownBrackets,
+      closeBrackets(),
+      wrapSelectionMarkers,
+      syntaxHighlighting(codeHighlighter),
       EditorView.lineWrapping,
       drawSelection(),
       EditorView.contentAttributes.of({ spellcheck: 'true', 'aria-label': 'Markdown document' }),
       placeholder('Begin anywhere…'),
       preview.of(MarginLivePreview.extension),
       comparison.of([]),
-      keymap.of([indentWithTab, ...defaultKeymap]),
+      keymap.of([...closeBracketsKeymap, indentWithTab, ...defaultKeymap]),
       EditorView.updateListener.of(update => {
         if (update.docChanged && !update.transactions.some(tr => tr.annotation(fromApp))) changed(update.state.doc.toString());
         // The comparison can finish with a view update of its own, which cannot start inside this one.
         if (comparing) queueMicrotask(updateComparison);
+        if (update.selectionSet || update.docChanged) updateCursorPosition(update.state);
         if (update.selectionSet && document.body.classList.contains('typewriter') && update.view.hasFocus) {
           setTimeout(() => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'center' }) }));
         }
@@ -119,6 +153,10 @@
     $('#toast').textContent = message;
     $('#toast').hidden = false;
     toastTimer = setTimeout(() => $('#toast').hidden = true, 3000);
+  }
+  function updateCursorPosition(state) {
+    const head = state.selection.main.head, line = state.doc.lineAt(head);
+    $('#cursor-position').textContent = `Ln ${line.number.toLocaleString()}, Col ${(head - line.from + 1).toLocaleString()}`;
   }
   function changed(text) {
     raw = text;
@@ -171,6 +209,7 @@
     if (data.folder) { folder = data.folder; renderFiles(); }
     else if (folder) renderFiles();
     if (Array.isArray(data.openFiles)) { openFiles = data.openFiles; renderOpenFiles(); }
+    if (data.textZoom != null) setTextZoom(Number(data.textZoom));
     refresh();
     documentToken = data.token ?? null;
     editRevision = 0;
@@ -271,6 +310,8 @@
     const tree = ensureSyntaxTree(state, state.doc.length, 100) ?? syntaxTree(state);
     const result = [];
     tree.iterate({ enter(node) {
+      // Fenced code is parsed in its own language, which may itself be Markdown.
+      if (node.name === 'FencedCode' || node.name === 'CodeBlock') return false;
       const match = /^(?:ATX|Setext)Heading(\d)$/.exec(node.name);
       if (!match) return;
       const firstLine = state.doc.lineAt(node.from);
@@ -461,19 +502,93 @@
     else if (kind === 'table') insertBlock('| Column | Column | Column |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |', 2);
     view.focus();
   }
-  function find(direction = 1) {
-    const query = $('#find-input').value.toLocaleLowerCase();
-    if (!query) { $('#find-result').textContent = ''; return; }
-    const text = raw.toLocaleLowerCase();
+  const useRegex = () => $('#find-regex').getAttribute('aria-pressed') === 'true';
+  // Null without a query, and undefined when the regular expression does not compile.
+  function findPattern() {
+    const query = $('#find-input').value;
+    if (!query) return null;
+    try { return new RegExp(useRegex() ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gimu'); } catch { return undefined; }
+  }
+  function findMatches(pattern) {
     const matches = [];
-    for (let index = text.indexOf(query); index !== -1; index = text.indexOf(query, index + query.length)) matches.push(index);
+    for (const match of view.state.doc.toString().matchAll(pattern)) if (match[0]) matches.push({ from: match.index, to: match.index + match[0].length, match });
+    return matches;
+  }
+  // With after, selects the first match starting there or later; otherwise steps from the current match.
+  function find(direction = 1, after = null) {
+    const pattern = findPattern();
+    if (!pattern) { $('#find-result').textContent = pattern === null ? '' : 'Invalid pattern'; return; }
+    const matches = findMatches(pattern);
     if (!matches.length) { $('#find-result').textContent = 'No matches'; return; }
-    activeMatch = (activeMatch + direction + matches.length) % matches.length;
-    const index = matches[activeMatch];
-    view.dispatch({ selection: { anchor: index, head: index + query.length }, effects: EditorView.scrollIntoView(index, { y: 'center' }) });
+    if (after === null) activeMatch = (activeMatch + direction + matches.length) % matches.length;
+    else activeMatch = Math.max(0, matches.findIndex(match => match.from >= after));
+    const { from, to } = matches[activeMatch];
+    view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) });
     $('#find-result').textContent = `${activeMatch + 1} of ${matches.length}`;
   }
-  function showFind() { $('#find-bar').hidden = false; $('#find-input').focus(); $('#find-input').select(); }
+  // In regular expression mode the replacement expands $$, $&, $`, $', $1–$99 and $<name> as
+  // String.replace does. It is done here because WebKit's replace ignores lastIndex on a sticky
+  // pattern, so a single match cannot be replaced in place with the document as context.
+  function replacementFor(text, { match }) {
+    const replacement = $('#replace-input').value;
+    if (!useRegex()) return replacement;
+    return replacement.replace(/\$(?:([$&`'])|(\d\d?)|<([^>]*)>)/g, (token, symbol, digits, name) => {
+      if (symbol === '$') return '$';
+      if (symbol === '&') return match[0];
+      if (symbol === '`') return text.slice(0, match.index);
+      if (symbol === "'") return text.slice(match.index + match[0].length);
+      if (name !== undefined) return match.groups ? match.groups[name] ?? '' : token;
+      if (digits.length === 2 && +digits > 0 && +digits < match.length) return match[+digits] ?? '';
+      return +digits[0] > 0 && +digits[0] < match.length ? (match[+digits[0]] ?? '') + digits.slice(1) : token;
+    });
+  }
+  function replaceOne() {
+    const pattern = findPattern();
+    if (!pattern) return;
+    const { from, to } = view.state.selection.main;
+    const current = findMatches(pattern).find(match => match.from === from && match.to === to);
+    if (!current) { find(1, from); return; }
+    const insert = replacementFor(view.state.doc.toString(), current);
+    view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input.replace' });
+    find(1, from + insert.length);
+  }
+  function replaceAll() {
+    const pattern = findPattern();
+    if (!pattern) return;
+    const text = view.state.doc.toString();
+    const matches = findMatches(pattern);
+    if (!matches.length) return;
+    view.dispatch({ changes: matches.map(match => ({ from: match.from, to: match.to, insert: replacementFor(text, match) })), userEvent: 'input.replace.all' });
+    activeMatch = -1;
+    $('#find-result').textContent = `Replaced ${matches.length.toLocaleString()}`;
+  }
+  function showFind(replacing = false) {
+    $('#goto-bar').hidden = true;
+    $('#find-bar').hidden = false;
+    $('#find-bar').classList.toggle('replacing', replacing);
+    const input = replacing && $('#find-input').value ? $('#replace-input') : $('#find-input');
+    input.focus(); input.select();
+  }
+  function showGoToLine() {
+    $('#find-bar').hidden = true;
+    $('#goto-bar').hidden = false;
+    $('#goto-input').placeholder = `Go to line (1–${view.state.doc.lines.toLocaleString()}), or line:column`;
+    $('#goto-result').textContent = '';
+    $('#goto-input').focus(); $('#goto-input').select();
+  }
+  // Line and column count from 1 and are clamped to the document.
+  function goToLine() {
+    const match = /^\s*(\d+)\s*(?:[:,]\s*(\d+))?\s*$/.exec($('#goto-input').value);
+    if (!match) { $('#goto-result').textContent = 'Enter a line number'; return; }
+    const doc = view.state.doc;
+    const line = doc.line(Math.min(Math.max(+match[1], 1), doc.lines));
+    const column = Math.min(Math.max(+(match[2] ?? 1), 1), line.length + 1);
+    $('#goto-bar').hidden = true;
+    revealPosition(line.from + column - 1);
+  }
+  function setTextZoom(zoom) {
+    if (Number.isFinite(zoom) && zoom > 0) { $('#editor').style.setProperty('--text-zoom', String(zoom)); view.requestMeasure(); }
+  }
   function exportHTML() {
     return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Markdown document</title><style>body{max-width:760px;margin:60px auto;padding:0 30px;color:#303633;font:17px/1.8 Georgia,serif}h1,h2,h3{font-family:system-ui;line-height:1.3}pre,code{background:#f5f6f3;border-radius:4px}pre{padding:20px;overflow:auto}code{font:13px/1.7 monospace}blockquote{border-left:3px solid #a0b39a;margin-left:0;padding-left:20px;color:#777}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px}img{max-width:100%}a{color:#537460}.task-list-item{list-style:none}</style></head><body>' + MarginMarkdown.renderDocument(raw) + '</body></html>';
   }
@@ -485,6 +600,9 @@
     else if (name === 'sidebar') document.body.classList.toggle('no-sidebar');
     else if (name === 'outline') { document.body.classList.remove('no-sidebar'); showTab('outline'); }
     else if (name === 'find') showFind();
+    else if (name === 'replace') showFind(true);
+    else if (name === 'goToLine') showGoToLine();
+    else if (name === 'textZoom') setTextZoom(Number(value));
     else if (name === 'typewriter') setTypewriter();
     else if (name === 'exportHTML') post('exportHTML', { html: exportHTML() });
     else if (name === 'print') post('print');
@@ -508,7 +626,7 @@
   // App shortcuts run before the editor's own key handling. Undo belongs to the
   // native document, so inside the document the undo keys go there.
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { closeMenus(); $('#find-bar').hidden = true; }
+    if (event.key === 'Escape') { closeMenus(); $('#find-bar').hidden = true; $('#goto-bar').hidden = true; }
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     const key = event.key.toLowerCase();
     const inDocument = view.contentDOM.contains(event.target);
@@ -519,8 +637,9 @@
     else if (inDocument && key === 'k' && !event.shiftKey) format('link');
     else if (key === '/') command('source');
     else if (key === 'f' && !event.shiftKey) command('find');
+    else if (key === 'l' && !event.shiftKey) command('goToLine');
     else if (key === 'l' && event.shiftKey) command('sidebar');
-    else if (/^[0-6]$/.test(key)) format(key === '0' ? 'paragraph' : `h${key}`);
+    else if (/^[1-6]$/.test(key)) format(`h${key}`);
     else if (key === 's') post(event.shiftKey ? 'saveAs' : 'save');
     else if (key === 'o') post(event.shiftKey ? 'openFolder' : 'open');
     else if (key === 'n' && !event.shiftKey) post('new');
@@ -538,6 +657,12 @@
   $('#word-count').onclick = () => toast($('#word-count').title);
   $('#find-input').oninput = () => { activeMatch = -1; find(); };
   $('#find-input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); find(event.shiftKey ? -1 : 1); } };
+  $('#find-regex').onclick = () => { $('#find-regex').setAttribute('aria-pressed', String(!useRegex())); activeMatch = -1; find(); $('#find-input').focus(); };
+  $('#replace-input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); replaceOne(); } };
+  $('#replace-one').onclick = replaceOne; $('#replace-all').onclick = replaceAll;
+  $('#goto-input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); goToLine(); } };
+  $('#goto-close').onclick = () => { $('#goto-bar').hidden = true; view.focus(); };
+  $('#cursor-position').onclick = showGoToLine;
   $('#find-prev').onclick = () => find(-1); $('#find-next').onclick = () => find(1);
   $('#find-close').onclick = () => { $('#find-bar').hidden = true; view.focus(); };
   $('#disk-reload').onclick = () => post('diskReload');

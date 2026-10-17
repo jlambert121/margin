@@ -43,6 +43,17 @@ struct Settings {
         get { defaults.string(forKey: "appIcon").flatMap(AppIconChoice.init(rawValue:)) ?? .night }
         nonmutating set { defaults.set(newValue.rawValue, forKey: "appIcon") }
     }
+    // Document text size as a multiple of the default, stepped like a browser's zoom.
+    static let textZoomSteps: [Double] = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
+    var textZoom: Double {
+        get {
+            let stored = defaults.double(forKey: "textZoom")
+            return stored > 0 ? min(max(stored, Self.textZoomSteps.first!), Self.textZoomSteps.last!) : 1
+        }
+        nonmutating set { defaults.set(newValue, forKey: "textZoom") }
+    }
+    func zoomedIn() -> Double { Self.textZoomSteps.first { $0 > textZoom + 0.001 } ?? Self.textZoomSteps.last! }
+    func zoomedOut() -> Double { Self.textZoomSteps.last { $0 < textZoom - 0.001 } ?? Self.textZoomSteps.first! }
 }
 
 final class SettingsWindowController: NSWindowController {

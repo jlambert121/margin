@@ -4,11 +4,13 @@
 export { EditorState, EditorSelection, ChangeSet, StateField, StateEffect, Compartment, Annotation, Prec } from '@codemirror/state';
 export { EditorView, Decoration, WidgetType, keymap, placeholder, drawSelection } from '@codemirror/view';
 export { defaultKeymap, indentWithTab } from '@codemirror/commands';
-export { LanguageSupport, syntaxTree, ensureSyntaxTree } from '@codemirror/language';
-// The pieces of markdown() the editor uses. markdown() itself also brings in the
-// HTML language for tag completion and HTML highlighting, which the editor does
-// not use.
-export { markdownLanguage, markdownKeymap, pasteURLAsLink } from '@codemirror/lang-markdown';
+export { syntaxTree, ensureSyntaxTree, syntaxHighlighting, languageDataProp } from '@codemirror/language';
+export { tags, tagHighlighter } from '@lezer/highlight';
+export { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+export { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+// Fenced code highlighting for every language CodeMirror knows. Each language
+// loads through a dynamic import, which the single-file bundle inlines.
+export { languages as codeLanguages } from '@codemirror/language-data';
 // Comparing the document with a newer version of its file on disk.
 export { unifiedMergeView, getChunks, getOriginalDoc, originalDocChangeEffect } from '@codemirror/merge';
 export { default as MarkdownIt } from 'markdown-it';

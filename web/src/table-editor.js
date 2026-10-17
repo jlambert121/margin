@@ -93,7 +93,7 @@
   // Tables chosen for "Edit as Markdown", by start position, until the selection leaves them.
   const showSource = StateEffect.define({ map: (pos, mapping) => mapping.mapPos(pos) });
   const tableAt = (state, pos) => {
-    for (let node = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent) if (node.name === 'Table') return node;
+    for (let node = syntaxTree(state).resolve(pos, 1); node; node = node.parent) if (node.name === 'Table') return node;
     return null;
   };
   const sourceTables = StateField.define({

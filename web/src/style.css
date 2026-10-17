@@ -15,6 +15,19 @@
   --diff-disk-mark:#d9786a;
   --diff-mine:#e5efe3;
   --diff-mine-mark:#6fa067;
+  --code-keyword:#8b3f73;
+  --code-string:#3d7a52;
+  --code-number:#a35a1c;
+  --code-comment:#8e928b;
+  --code-function:#2f6690;
+  --code-type:#7a5c0a;
+  --code-property:#4a6782;
+  --code-tag:#a03d3d;
+  --code-regexp:#a1501f;
+  --code-inserted:#2f7d32;
+  --code-deleted:#b0413e;
+  /* Scales the document text; the editor element overrides it from View › Zoom. */
+  --text-zoom:1;
   font-family:-apple-system,BlinkMacSystemFont,sans-serif;
   font-size:13px
 }
@@ -440,7 +453,7 @@ main {
 
 #editor .cm-scroller {
   font-family:Georgia,'Times New Roman',serif;
-  font-size:17px;
+  font-size:calc(17px * var(--text-zoom));
   line-height:1.85
 }
 
@@ -467,7 +480,7 @@ main {
 
 #editor.source-mode .cm-scroller {
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:14px;
+  font-size:calc(14px * var(--text-zoom));
   line-height:1.8
 }
 
@@ -479,29 +492,29 @@ main {
 }
 
 #editor .cm-md-h1 {
-  font-size:35px;
+  font-size:calc(35px * var(--text-zoom));
   font-weight:650;
   padding-bottom:14px
 }
 
 #editor .cm-md-h2 {
-  font-size:25px;
+  font-size:calc(25px * var(--text-zoom));
   padding-top:24px;
   padding-bottom:6px
 }
 
 #editor .cm-md-h3 {
-  font-size:20px;
+  font-size:calc(20px * var(--text-zoom));
   padding-top:14px;
   padding-bottom:4px
 }
 
 .cm-md-h4 {
-  font-size:17px
+  font-size:calc(17px * var(--text-zoom))
 }
 
 .cm-md-h5,.cm-md-h6 {
-  font-size:15px;
+  font-size:calc(15px * var(--text-zoom));
   color:var(--muted)
 }
 
@@ -570,7 +583,7 @@ main {
 #editor .cm-md-codeblock {
   background:var(--code);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:13px;
+  font-size:calc(13px * var(--text-zoom));
   line-height:1.7;
   padding:0 22px;
   border-left:1px solid var(--line);
@@ -596,7 +609,7 @@ main {
 
 .cm-md-fence-label {
   font-family:-apple-system,BlinkMacSystemFont,sans-serif;
-  font-size:10px;
+  font-size:calc(10px * var(--text-zoom));
   letter-spacing:1.2px;
   text-transform:uppercase;
   color:var(--muted)
@@ -604,7 +617,7 @@ main {
 
 .cm-md-table-source {
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:14px
+  font-size:calc(14px * var(--text-zoom))
 }
 
 .cm-md-table {
@@ -621,7 +634,7 @@ main {
   outline-offset:-2px;
   background:var(--paper);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:13px
+  font-size:calc(13px * var(--text-zoom))
 }
 
 .table-menu {
@@ -638,7 +651,7 @@ main {
 .cm-md-table table,#print-view table {
   width:100%;
   border-collapse:collapse;
-  font-size:14px
+  font-size:calc(14px * var(--text-zoom))
 }
 
 .cm-md-table th,.cm-md-table td,#print-view th,#print-view td {
@@ -745,7 +758,7 @@ main {
   right:16px
 }
 
-#find-bar {
+#find-bar,#goto-bar {
   display:flex;
   align-items:center;
   gap:8px;
@@ -754,7 +767,7 @@ main {
   font-size:11px
 }
 
-#find-input {
+#find-input,#replace-input,#goto-input {
   background:var(--paper);
   color:var(--text);
   border:1px solid var(--line);
@@ -763,12 +776,78 @@ main {
   flex:1
 }
 
-#find-result {
+#find-result,#goto-result {
   color:var(--muted)
 }
 
-#find-bar button {
+#find-bar button,#goto-bar button {
   padding:4px 8px
+}
+
+#find-regex {
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace
+}
+
+#find-regex[aria-pressed=true] {
+  background:var(--select);
+  color:var(--accent)
+}
+
+#find-bar:not(.replacing) .replace-control {
+  display:none
+}
+
+.cm-code-keyword {
+  color:var(--code-keyword)
+}
+
+.cm-code-string {
+  color:var(--code-string)
+}
+
+.cm-code-number {
+  color:var(--code-number)
+}
+
+.cm-code-comment {
+  color:var(--code-comment);
+  font-style:italic
+}
+
+.cm-code-function {
+  color:var(--code-function)
+}
+
+.cm-code-type {
+  color:var(--code-type)
+}
+
+.cm-code-property {
+  color:var(--code-property)
+}
+
+.cm-code-tag {
+  color:var(--code-tag)
+}
+
+.cm-code-regexp {
+  color:var(--code-regexp)
+}
+
+.cm-code-meta {
+  color:var(--muted)
+}
+
+.cm-code-inserted {
+  color:var(--code-inserted)
+}
+
+.cm-code-deleted {
+  color:var(--code-deleted)
+}
+
+.cm-code-invalid {
+  text-decoration:underline wavy var(--code-deleted)
 }
 
 .notice-bar {
@@ -939,7 +1018,18 @@ body[data-theme=dark] {
   --diff-disk:#3a2926;
   --diff-disk-mark:#c7766a;
   --diff-mine:#26362a;
-  --diff-mine-mark:#7fae76
+  --diff-mine-mark:#7fae76;
+  --code-keyword:#d19bd0;
+  --code-string:#a5c98e;
+  --code-number:#e0a46b;
+  --code-comment:#7f8a81;
+  --code-function:#8fb8de;
+  --code-type:#d8c07a;
+  --code-property:#a9c2d9;
+  --code-tag:#e39090;
+  --code-regexp:#e3a87a;
+  --code-inserted:#8fc98a;
+  --code-deleted:#e38b85
 }
 
 @media(max-width:850px) {

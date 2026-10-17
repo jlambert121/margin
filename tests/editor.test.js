@@ -188,6 +188,106 @@
     assert(document.querySelector('#find-result').textContent === '2 of 2' && view.state.selection.main.from > first.from, 'Next result failed');
     document.querySelector('#find-close').click();
   });
+  await test('Status bar shows the cursor line and column', async () => {
+    app.load({ name: 'Cursor.md', text: '# Title\n\nSecond line\n' });
+    const position = document.querySelector('#cursor-position');
+    assert(position.textContent === 'Ln 1, Col 1', `Unexpected initial position: ${position.textContent}`);
+    view.dispatch({ selection: { anchor: view.state.doc.line(3).from + 6 } });
+    assert(position.textContent === 'Ln 3, Col 7', `Position did not follow the cursor: ${position.textContent}`);
+  });
+  // Types text through the editor's input handlers, as a keystroke would.
+  const type = text => {
+    const { from, to } = view.state.selection.main;
+    const insert = () => view.state.update({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent: 'input.type' });
+    if (!view.state.facet(EditorView.inputHandler).some(handler => handler(view, from, to, text, insert))) view.dispatch(insert());
+  };
+  const { EditorView } = MarginEditor;
+  const findInput = value => { const input = document.querySelector('#find-input'); input.value = value; input.dispatchEvent(new Event('input')); };
+  await test('Find and replace replaces one match at a time and all at once', async () => {
+    app.load({ name: 'Replace.md', text: 'a.b axb a.b a.b\n' });
+    app.command('replace'); await tick();
+    assert(!document.querySelector('#replace-input').hidden && getComputedStyle(document.querySelector('#replace-one')).display !== 'none', 'Replace controls hidden');
+    findInput('a.b');
+    assert(document.querySelector('#find-result').textContent === '1 of 3', 'Literal search treated . as a pattern: ' + document.querySelector('#find-result').textContent);
+    document.querySelector('#replace-input').value = 'X';
+    document.querySelector('#replace-one').click();
+    assert(view.state.doc.toString() === 'X axb a.b a.b\n', 'Replace changed the wrong text: ' + view.state.doc.toString());
+    assert(document.querySelector('#find-result').textContent === '1 of 2' && view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) === 'a.b', 'Replace did not move to the next match');
+    document.querySelector('#replace-all').click();
+    assert(view.state.doc.toString() === 'X axb X X\n', 'Replace all failed: ' + view.state.doc.toString());
+    app.command('find');
+    assert(getComputedStyle(document.querySelector('#replace-one')).display === 'none', 'Find did not hide replace');
+    document.querySelector('#find-close').click();
+  });
+  await test('Regular expression search expands groups and reports invalid patterns', async () => {
+    app.load({ name: 'Regex.md', text: 'ann@example\nbob@test\n' });
+    app.command('replace');
+    document.querySelector('#find-regex').click();
+    assert(document.querySelector('#find-regex').getAttribute('aria-pressed') === 'true', 'Regex toggle did not turn on');
+    findInput('(');
+    assert(document.querySelector('#find-result').textContent === 'Invalid pattern', 'Invalid pattern not reported');
+    findInput('^(\\w+)@(\\w+)$');
+    assert(document.querySelector('#find-result').textContent === '1 of 2', 'Line anchors did not match each line');
+    document.querySelector('#replace-input').value = '$2 at $1';
+    document.querySelector('#replace-one').click();
+    assert(view.state.doc.toString() === 'example at ann\nbob@test\n', 'Groups not expanded: ' + view.state.doc.toString());
+    document.querySelector('#replace-all').click();
+    assert(view.state.doc.toString() === 'example at ann\ntest at bob\n', 'Replace all did not expand groups: ' + JSON.stringify(view.state.doc.toString()));
+    document.querySelector('#find-regex').click();
+    document.querySelector('#find-close').click();
+  });
+  await test('Go to line moves the cursor to a line and column', async () => {
+    app.load({ name: 'Lines.md', text: 'one\ntwo\nthree\n' });
+    app.command('goToLine');
+    const input = document.querySelector('#goto-input'), enter = () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert(!document.querySelector('#goto-bar').hidden && document.activeElement === input, 'Go to line did not open');
+    input.value = 'nope'; enter();
+    assert(document.querySelector('#goto-result').textContent === 'Enter a line number', 'Bad input not reported');
+    input.value = '3:4'; enter();
+    assert(document.querySelector('#goto-bar').hidden && view.state.selection.main.head === 8 + 3, 'Did not go to line 3, column 4');
+    assert(document.querySelector('#cursor-position').textContent === 'Ln 3, Col 4', 'Status bar not updated');
+    app.command('goToLine'); input.value = '99:99'; enter();
+    assert(view.state.selection.main.head === view.state.doc.length, 'Out of range line was not clamped to the end');
+  });
+  await test('Brackets and quotes close, and emphasis markers wrap a selection', async () => {
+    app.load({ name: 'Brackets.md', text: '' });
+    type('('); assert(view.state.doc.toString() === '()' && view.state.selection.main.head === 1, 'Parenthesis not closed');
+    type(')'); assert(view.state.doc.toString() === '()' && view.state.selection.main.head === 2, 'Closing parenthesis not stepped over');
+    type(' '); type('"'); assert(view.state.doc.toString() === '() ""', 'Double quote not closed: ' + JSON.stringify(view.state.doc.toString()));
+    app.load({ name: 'Fence.md', text: '' });
+    type('`'); type('`'); type('`');
+    assert(view.state.doc.toString() === '```' && view.state.selection.main.head === 3, 'Typing a code fence left extra backticks: ' + JSON.stringify(view.state.doc.toString()));
+    app.load({ name: 'Apostrophe.md', text: '' });
+    type("'"); assert(view.state.doc.toString() === "'", 'Single quote was paired');
+    app.load({ name: 'Wrap.md', text: 'some word here' });
+    view.dispatch({ selection: { anchor: 5, head: 9 } });
+    type('*'); type('*');
+    assert(view.state.doc.toString() === 'some **word** here', 'Selection not wrapped: ' + view.state.doc.toString());
+    assert(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) === 'word', 'Wrapped text no longer selected');
+    view.dispatch({ selection: { anchor: 0 } });
+    type('*'); assert(view.state.doc.toString() === '*some **word** here', 'A marker without a selection was paired');
+  });
+  await test('Fenced code is highlighted in its language and Markdown text is not', async () => {
+    app.load({ name: 'Code.md', text: '# Title "quoted"\n\n```javascript\nconst x = "s"; // note\n```\n\n```md\n# Inner\n```\n' });
+    app.command('source');
+    let keyword;
+    for (let tries = 0; tries < 20 && !keyword; tries++) { await tick(); keyword = $$('.cm-code-keyword').find(node => node.textContent === 'const'); }
+    assert(keyword, 'JavaScript keyword not highlighted');
+    assert($$('.cm-code-string').some(node => node.textContent === '"s"') && $$('.cm-code-comment').some(node => node.textContent === '// note'), 'String or comment not highlighted');
+    assert(!document.querySelector('.cm-line .cm-code-string')?.closest('.cm-line')?.textContent.startsWith('# Title'), 'Markdown text was highlighted as code');
+    app.command('outline'); await tick();
+    assert($$('#outline button').map(b => b.textContent).join('|') === 'Title "quoted"', 'Markdown inside a code block reached the outline');
+    app.command('source');
+  });
+  await test('Text zoom scales the document text only', async () => {
+    const size = () => parseFloat(getComputedStyle(view.scrollDOM).fontSize);
+    const base = size(), chrome = getComputedStyle(document.querySelector('#statusbar')).fontSize;
+    app.command('textZoom', 1.5);
+    assert(Math.abs(size() - base * 1.5) < 0.01, `Text did not scale: ${base} → ${size()}`);
+    assert(getComputedStyle(document.querySelector('#statusbar')).fontSize === chrome, 'Status bar scaled with the text');
+    app.load({ name: 'Zoomed.md', text: 'x', textZoom: 1 });
+    assert(Math.abs(size() - base) < 0.01, 'Loading did not apply the zoom it was sent');
+  });
   await test('Typewriter control works', async () => {
     app.command('typewriter'); assert(document.body.classList.contains('typewriter'), 'Typewriter mode not applied');
     app.command('typewriter');
