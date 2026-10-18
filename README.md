@@ -25,6 +25,10 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding
 - Find and replace, optionally with regular expressions (`$1`, `$&`, and `$<name>` in replacements), and Go to Line (`line` or `line:column`; also opened by clicking the cursor position in the status bar).
 - Fenced code blocks are syntax highlighted in the language their info string names, for every language CodeMirror ships.
 - Brackets, double quotes, and backticks close as you type; typing `*`, `_`, or `~` over a selection wraps it.
+- Pasting from a web page or a document converts its formatting to Markdown: headings, emphasis, links, lists, tables, and code. Clipboard HTML without such structure, such as code copied from an editor, pastes as plain text, as does anything pasted into code or with Paste and Match Style.
+- YAML front matter at the top of a document shows as a labeled metadata block, and stays out of the outline, word count, HTML export, and printing.
+- Quick Open finds a file by name among the window's tabs, other open documents, recent files, and the workspace.
+- Right-click the workspace in the sidebar to create a file, rename one in place, or show it in Finder. Renaming a file that is open keeps its tab and unsaved edits.
 - Word and character counts, line counts, estimated reading time, and the cursor's line and column.
 - Text zoom for the document text, remembered across windows and launches.
 - Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
@@ -37,16 +41,25 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding
 | --- | --- |
 | ⌘N | New document |
 | ⌘O / ⇧⌘O | Open file / folder |
+| ⌥⌘P | Quick Open |
 | ⌘S / ⇧⌘S | Save / Save As |
-| ⌘Z / ⇧⌘Z | Undo / Redo |
-| ⌘/ | Toggle Markdown source |
-| ⌘B / ⌘I / ⌘K | Bold / Italic / Link |
-| ⌘1–6 / ⌥⌘0 | Heading / Body |
+| ⌘W | Close |
+| ⌘P | Print / Save as PDF |
+| ⌘Z / ⇧⌘Z (or ⌘Y) | Undo / Redo |
+| ⌥⇧⌘V | Paste and Match Style |
 | ⌘F / ⌥⌘F | Find / Find and Replace |
 | ⌘L | Go to Line |
-| ⌘+ / ⌘− / ⌘0 | Zoom in / Zoom out / Actual size |
+| ⌘B / ⌘I / ⌘K | Bold / Italic / Link |
+| ⌘1–6 / ⌥⌘0 | Heading / Body |
+| ⌘/ | Toggle Markdown source |
 | ⇧⌘L | Toggle sidebar |
-| ⌘P | Print / Save as PDF |
+| ⌘+ (or ⌘=) / ⌘− / ⌘0 | Zoom in / Zoom out / Actual size |
+| ⌃⌘F | Enter or exit full screen |
+| ⌘, | Settings |
+
+The standard macOS shortcuts also work: ⌘X / ⌘C / ⌘V, ⌘A, ⌘M, ⌘H, ⌥⌘H, and ⌘Q.
+
+In the find bar, Enter and ⇧Enter go to the next and previous match, Enter in the replace field replaces one, and Esc closes it. In Quick Open, ↑ and ↓ choose, Enter opens, and Esc closes. While renaming in the sidebar, Enter keeps the name and Esc cancels. Table cells have their own keys, listed above.
 
 Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open as tabs in the current window. In the sidebar's Open Files, click a tab to switch to it, or × to close it. The workspace list refreshes when Margin becomes the active app, or with its refresh button. The last workspace, appearance, app icon, and text zoom are remembered.
 
@@ -54,14 +67,15 @@ Command-click links to open them. New documents, File → Open, Open Recent, Fin
 
 - `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, editor windows and their bridge to the web editor, menus, file panels, workspace scanning, export/printing, and the restricted local-image URL handler.
 - `Sources/Sidebar.swift`: the native sidebar and the sidebar state shared by a window's tabs.
+- `Sources/QuickOpen.swift`: the Quick Open panel and its file matching.
 - `Sources/Settings.swift`: stored settings and the Settings window.
 - `Sources/RecoveryStore.swift`: recovery copies of unsaved edits.
 - `web/src/app.js`: CodeMirror editor setup, bridge messages, navigation, search, formatting commands, and view state.
 - `web/src/live-preview.js`: the live preview, built from CodeMirror decorations over the Markdown syntax tree.
 - `web/src/table-editor.js`: the grid table editor, a CodeMirror widget that edits the table's Markdown text.
-- `web/src/markdown.js`: Markdown to sanitized HTML (markdown-it and DOMPurify) for export, printing, statistics, and table previews.
+- `web/src/markdown.js`: Markdown to sanitized HTML (markdown-it and DOMPurify) for export, printing, statistics, and table previews; pasted HTML to Markdown (Turndown); and the front matter rule.
 - `web/src/style.css`: writing typography, application layout, themes, and print styles.
-- `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing and every CodeMirror code language, markdown-it, and DOMPurify), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
+- `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing and every CodeMirror code language, markdown-it, DOMPurify, and Turndown), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
 - `tools/editor-bundle/` and `scripts/build-editor.sh` (`npm run build:editor`): rebuild the vendored bundle with Rollup. Only needed after changing the bundle entry or a dependency version, and the only step that needs `npm install` (Node.js 20 or later).
 - `Resources/`: editable welcome document, Info.plist, the bundle icon, and the icon choices in `Resources/Icons/`.
 - `scripts/build.sh`: compiles Swift, copies web assets into the app bundle, and applies an ad hoc signature.
@@ -94,6 +108,6 @@ Save and Save As read the editor's current text first when the editor is availab
 
 This implements the core Markdown editing workflow. Math typesetting, Mermaid rendering, footnote tooling, custom CSS theme import, Pandoc formats, and iCloud coordination are not implemented. Code highlighting is in the editor only; HTML export and printing show code fences as plain code.
 
-The editor edits the Markdown text directly, so the file keeps exactly what was typed; nothing is reformatted. Syntax the live preview does not render, such as front matter, math, and HTML, stays visible as text. The app rejects files that are not UTF-8.
+The editor edits the Markdown text directly, so the file keeps exactly what was typed; nothing is reformatted. Syntax the live preview does not render, such as math and HTML, stays visible as text. The app rejects files that are not UTF-8.
 
 Local image paths must stay within the document directory; parent-directory and symbolic-link escapes are rejected. Exported HTML retains relative image references, so save it beside its Markdown file or use embedded/remote images. The folder browser skips hidden files, symlinks, dependency/build directories, and limits scans to 5,000 entries and 12 directory levels.

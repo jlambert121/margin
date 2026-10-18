@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
 import terser from '@rollup/plugin-terser';
 
 // Writes the license of every package that ends up in the bundle next to it.
@@ -11,6 +12,8 @@ function bundledLicenses(file) {
       const roots = new Set();
       for (const chunk of Object.values(bundle)) {
         for (const id of Object.keys(chunk.modules ?? {})) {
+          // Plugins' virtual modules start with a NUL byte; the real file is listed too.
+          if (id.startsWith('\0')) continue;
           const match = id.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//);
           if (match) roots.add(match[1]);
         }
@@ -29,5 +32,5 @@ function bundledLicenses(file) {
 export default {
   input: 'tools/editor-bundle/entry.js',
   output: { dir: 'web/vendor', entryFileNames: 'codemirror.bundle.js', format: 'iife', name: 'MarginEditor', inlineDynamicImports: true },
-  plugins: [nodeResolve(), terser({ format: { comments: false } }), bundledLicenses('codemirror.bundle.LICENSES.txt')],
+  plugins: [nodeResolve(), commonjs(), terser({ format: { comments: false } }), bundledLicenses('codemirror.bundle.LICENSES.txt')],
 };

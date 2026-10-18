@@ -542,6 +542,8 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         splitController.splitViewItems = [sidebarItem, NSSplitViewItem(viewController: content)]
         splitController.view.frame = NSRect(x: 0, y: 0, width: 1180, height: 820)
         window.contentViewController = splitController
+        // Otherwise AppKit focuses the first field it finds, the sidebar's filter.
+        window.initialFirstResponder = webView
         window.setContentSize(NSSize(width: 1180, height: 820))
         window.center()
         window.tabbingMode = .preferred
@@ -831,6 +833,17 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         sidebar.onSelectOpenFile = { [weak self] id in self?.selectTab(id: id) }
         sidebar.onCloseOpenFile = { [weak self] id in self?.closeTab(id: id) }
         sidebar.onOpenPath = { [weak self] path in self?.openWorkspaceFile(path) }
+        sidebar.onNewFile = { [weak self] folder in
+            guard let self, let window = self.window else { return }
+            do { try self.app?.createWorkspaceFile(in: URL(fileURLWithPath: folder), asTabIn: window) }
+            catch { self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil) }
+        }
+        sidebar.onRename = { [weak self] path, name in
+            self?.app?.renameWorkspaceFile(URL(fileURLWithPath: path), to: name) { error in
+                guard let self, let error, let window = self.window else { return }
+                self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
+            }
+        }
         sidebar.onReveal = { [weak self] pos in
             guard let self else { return }
             self.window?.makeFirstResponder(self.webView)
@@ -885,11 +898,9 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     func showOutline() { sidebar.state.collapsed = false; sidebar.state.mode = .outline }
     // Workspace clicks may name only Markdown files inside the open folder.
     func openWorkspaceFile(_ path: String) {
-        guard let folder = app?.workspace, let window else { return }
         let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
-        let root = folder.standardizedFileURL.resolvingSymlinksInPath()
-        guard url.path.hasPrefix(root.path + "/"), markdownExtensions.contains(url.pathExtension.lowercased()) else { return }
-        app?.open([url], asTabsIn: window)
+        guard let app, let window, app.isInWorkspace(url), markdownExtensions.contains(url.pathExtension.lowercased()) else { return }
+        app.open([url], asTabsIn: window)
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated {
@@ -989,6 +1000,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // The workspace's Markdown files as of the last scan, shared by every sidebar.
     private(set) var workspaceTree: FolderEntry?
     private var workspaceScan = 0
+    private(set) var quickOpen: QuickOpenController?
     var controller: DocumentController!
     let recoveryStore: RecoveryStore
     let settings: Settings
@@ -1095,7 +1107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Finder, Dock, and File > Open go straight to the document controller, and
     // editor windows prefer tabs, so those join the frontmost window. Drops and
     // workspace clicks name their window, which may not be frontmost.
-    func open(_ urls: [URL], asTabsIn window: NSWindow) {
+    func open(_ urls: [URL], asTabsIn window: NSWindow, opened: @escaping (NSDocument) -> Void = { _ in }) {
         for url in urls {
             controller.openDocument(withContentsOf: url, display: false) { [weak self] document, alreadyOpen, error in
                 if let error { self?.controller.presentError(error); return }
@@ -1105,8 +1117,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     window.tabGroup?.addWindow(tab)
                 }
                 document.showWindows()
+                opened(document)
             }
         }
+    }
+    func isInWorkspace(_ url: URL) -> Bool {
+        guard let workspace else { return false }
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path, root = workspace.standardizedFileURL.resolvingSymlinksInPath().path
+        return path == root || path.hasPrefix(root + "/")
+    }
+    // An empty Markdown file with an unused name, opened as a tab and ready to rename.
+    func createWorkspaceFile(in folder: URL, asTabIn window: NSWindow) throws {
+        guard isInWorkspace(folder) else { throw CocoaError(.fileWriteNoPermission) }
+        var url = folder.appendingPathComponent("Untitled.md"), number = 2
+        while FileManager.default.fileExists(atPath: url.path) { url = folder.appendingPathComponent("Untitled \(number).md"); number += 1 }
+        try Data().write(to: url, options: .withoutOverwriting)
+        refreshFolders { [weak self] in
+            self?.open([url], asTabsIn: window) { document in (document as? MarkdownDocument)?.editorController?.sidebar.beginRename(path: url.path) }
+        }
+    }
+    // Keeps a Markdown extension, adding the file's own when the name has none. A file
+    // open in a tab moves with its document, which keeps the tab and any unsaved edits.
+    func renameWorkspaceFile(_ url: URL, to name: String, completion: @escaping (Error?) -> Void) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        func refused(_ reason: String) { completion(NSError(domain: "Margin.Rename", code: 1, userInfo: [NSLocalizedDescriptionKey: "“\(trimmed)” can’t be used as a file name.", NSLocalizedRecoverySuggestionErrorKey: reason])) }
+        guard isInWorkspace(url) else { completion(CocoaError(.fileWriteNoPermission)); return }
+        guard !trimmed.isEmpty, !trimmed.contains("/"), !trimmed.contains(":"), !trimmed.hasPrefix(".") else { refused("Use a name without “/” or “:” that doesn’t start with a period."); return }
+        let fileName = markdownExtensions.contains((trimmed as NSString).pathExtension.lowercased()) ? trimmed : trimmed + "." + (url.pathExtension.isEmpty ? "md" : url.pathExtension)
+        let destination = url.deletingLastPathComponent().appendingPathComponent(fileName)
+        guard destination.lastPathComponent != url.lastPathComponent else { completion(nil); return }
+        // A change only in letter case names the same file on a case-insensitive disk.
+        let sameFile = { (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier as? NSObject) == (try? destination.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier as? NSObject) }
+        if FileManager.default.fileExists(atPath: destination.path), !sameFile() { refused("A file named “\(fileName)” already exists in this folder."); return }
+        let finish = { [weak self] (error: Error?) in
+            self?.refreshFolders()
+            completion(error)
+        }
+        if let doc = controller.documents.first(where: { $0.fileURL?.standardizedFileURL == url.standardizedFileURL }) as? MarkdownDocument {
+            doc.move(to: destination) { error in
+                if error == nil { doc.editorController?.loadMetadata() }
+                finish(error)
+            }
+            return
+        }
+        var coordinationError: NSError?, moveError: Error?
+        let coordinator = NSFileCoordinator()
+        coordinator.coordinate(writingItemAt: url, options: .forMoving, writingItemAt: destination, options: .forReplacing, error: &coordinationError) { from, to in
+            do { try FileManager.default.moveItem(at: from, to: to); coordinator.item(at: from, didMoveTo: to) }
+            catch { moveError = error }
+        }
+        finish(coordinationError ?? moveError)
     }
     @objc private func openFilesChanged(_ notification: Notification) { scheduleOpenFilesRefresh() }
     func scheduleOpenFilesRefresh() {
@@ -1182,6 +1242,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func exportHTML(_ sender: Any?) { currentEditor?.send("exportHTML") }
     @objc func toggleSidebar(_ sender: Any?) { currentEditor?.toggleSidebar() }
+    @objc func showQuickOpen(_ sender: Any?) { if let currentEditor { showQuickOpen(for: currentEditor) } }
+    func showQuickOpen(for editor: EditorWindowController) {
+        guard let window = editor.window else { return }
+        quickOpen?.close()
+        let picker = QuickOpenController(items: quickOpenItems(for: editor)) { [weak self, weak window] item in
+            guard let window else { return }
+            switch item.target {
+            case let .document(doc): doc.showWindows()
+            case let .file(url): self?.open([url], asTabsIn: window)
+            }
+        }
+        picker.onClose = { [weak self, weak picker] in if self?.quickOpen === picker { self?.quickOpen = nil } }
+        quickOpen = picker
+        picker.show(over: window)
+    }
+    // This window's tabs, then other open documents, recent files, and the workspace's files.
+    func quickOpenItems(for editor: EditorWindowController) -> [QuickOpenItem] {
+        var items: [QuickOpenItem] = [], seen = Set<String>()
+        func folder(of url: URL) -> String {
+            let directory = url.deletingLastPathComponent().path
+            if let workspace, directory == workspace.path || directory.hasPrefix(workspace.path + "/") {
+                return workspace.lastPathComponent + directory.dropFirst(workspace.path.count)
+            }
+            return (directory as NSString).abbreviatingWithTildeInPath
+        }
+        func add(_ name: String, _ url: URL?, _ target: QuickOpenItem.Target) {
+            if let path = url?.standardizedFileURL.path { guard seen.insert(path).inserted else { return } }
+            items.append(QuickOpenItem(name: name, detail: url.map(folder(of:)) ?? "Open, not saved", target: target))
+        }
+        let tabs = editor.tabDocuments
+        let others = controller.documents.compactMap { $0 as? MarkdownDocument }.filter { doc in !tabs.contains { $0 === doc } }
+        for doc in tabs + others { add(doc.editorName, doc.fileURL, .document(doc)) }
+        for url in controller.recentDocumentURLs where FileManager.default.fileExists(atPath: url.path) { add(url.lastPathComponent, url, .file(url)) }
+        func files(_ entries: [FolderEntry]) {
+            for entry in entries {
+                if let children = entry.children { files(children) }
+                else { let url = URL(fileURLWithPath: entry.path); add(entry.name, url, .file(url)) }
+            }
+        }
+        files(workspaceTree?.children ?? [])
+        return items
+    }
+    @objc func pasteAndMatchStyle(_ sender: Any?) {
+        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        currentEditor?.send("pastePlain", text)
+    }
     @objc func showOutline(_ sender: Any?) { currentEditor?.showOutline() }
     @objc func zoomIn(_ sender: Any?) { setTextZoom(settings.zoomedIn()) }
     @objc func zoomOut(_ sender: Any?) { setTextZoom(settings.zoomedOut()) }
@@ -1243,6 +1349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(file, "New", #selector(newDocument(_:)), "n", target: self)
         item(file, "Open…", #selector(NSDocumentController.openDocument(_:)), "o", target: controller)
         item(file, "Open Folder…", #selector(openFolder(_:)), "o", modifiers: [.command, .shift], target: self)
+        item(file, "Quick Open…", #selector(showQuickOpen(_:)), "p", modifiers: [.command, .option], target: self)
         let recent = NSMenu(title: "Open Recent"); let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""); recentItem.submenu = recent; file.addItem(recentItem)
         recent.delegate = self
         file.addItem(.separator()); item(file, "Close", #selector(NSWindow.performClose(_:)), "w")
@@ -1254,7 +1361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let edit = menu("Edit")
         item(edit, "Undo", #selector(EditorWindowController.undoDocument(_:)), "z")
         item(edit, "Redo", #selector(EditorWindowController.redoDocument(_:)), "z", modifiers: [.command, .shift])
-        edit.addItem(.separator()); item(edit, "Cut", #selector(NSText.cut(_:)), "x"); item(edit, "Copy", #selector(NSText.copy(_:)), "c"); item(edit, "Paste", #selector(NSText.paste(_:)), "v"); item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
+        edit.addItem(.separator()); item(edit, "Cut", #selector(NSText.cut(_:)), "x"); item(edit, "Copy", #selector(NSText.copy(_:)), "c"); item(edit, "Paste", #selector(NSText.paste(_:)), "v"); item(edit, "Paste and Match Style", #selector(pasteAndMatchStyle(_:)), "v", modifiers: [.command, .option, .shift], target: self); item(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
         edit.addItem(.separator()); command(edit, "Find…", "find", "f"); command(edit, "Find and Replace…", "replace", "f", modifiers: [.command, .option]); command(edit, "Go to Line…", "goToLine", "l")
         let paragraph = menu("Paragraph")
         command(paragraph, "Body", "format:paragraph", "0", modifiers: [.command, .option])

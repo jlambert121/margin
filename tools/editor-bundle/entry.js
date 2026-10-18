@@ -8,6 +8,9 @@ export { syntaxTree, ensureSyntaxTree, syntaxHighlighting, languageDataProp } fr
 export { tags, tagHighlighter } from '@lezer/highlight';
 export { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 export { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+// YAML front matter is parsed inside the Markdown tree.
+export { yamlLanguage } from '@codemirror/lang-yaml';
+export { parseMixed } from '@lezer/common';
 // Fenced code highlighting for every language CodeMirror knows. Each language
 // loads through a dynamic import, which the single-file bundle inlines.
 export { languages as codeLanguages } from '@codemirror/language-data';
@@ -15,3 +18,6 @@ export { languages as codeLanguages } from '@codemirror/language-data';
 export { unifiedMergeView, getChunks, getOriginalDoc, originalDocChangeEffect } from '@codemirror/merge';
 export { default as MarkdownIt } from 'markdown-it';
 export { default as DOMPurify } from 'dompurify';
+// Pasted HTML to Markdown. The browser build parses with the page's DOM.
+export { default as TurndownService } from 'turndown/lib/turndown.browser.es.js';
+export { gfm as turndownGfm } from '@joplin/turndown-plugin-gfm';

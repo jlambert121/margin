@@ -207,6 +207,18 @@
           }
           return false;
         }
+        // Shown as a labeled metadata block, with its "---" lines as source while the cursor is in it.
+        case 'Frontmatter': {
+          const first = doc.lineAt(from), last = doc.lineAt(to);
+          eachLine(from, to, line => lineClass('cm-md-codeblock cm-md-frontmatter', line.from));
+          lineClass('cm-md-codeblock-first', first.from);
+          lineClass('cm-md-codeblock-last', last.from);
+          if (!touches(from, to)) {
+            add(Decoration.replace({ widget: new FenceLabelWidget('front matter') }), first.from, first.to);
+            if (children(node, 'FrontmatterMark').length > 1) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
+          }
+          return false;
+        }
         case 'CodeBlock': {
           eachLine(from, to, line => lineClass('cm-md-codeblock cm-md-indented-code', line.from));
           return false;

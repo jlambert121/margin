@@ -62,6 +62,49 @@
     assert(lineText('cm-md-list-line') !== undefined && $$('.cm-md-list-line')[1].textContent === '  - Two', 'Editing a nested item did not show its source');
     blur();
   });
+  await test('YAML front matter is a metadata block, not a heading, and stays out of the outline and output', async () => {
+    app.load({ name: 'Front.md', text: '---\r\ntitle: My note\ntags: [a, b]\n---\n\n# Real heading\n\nOne two.\n' }); blur(); await tick();
+    assert(app.headings().map(h => h.text).join('|') === 'Real heading', 'Front matter reached the outline: ' + app.headings().map(h => h.text).join('|'));
+    const lines = $$('.cm-md-frontmatter');
+    assert(lines.length === 4 && !document.querySelector('.cm-md-h2') && !document.querySelector('.cm-md-hr'), 'Front matter not shown as one block');
+    assert(lines[0].textContent === 'front matter' && lines[1].textContent === 'title: My note', 'Front matter label or content wrong: ' + lines.map(l => l.textContent).join('|'));
+    assert(lines[1].querySelector('[class*="cm-code-"]'), 'YAML not highlighted');
+    cursorAt(1); await tick();
+    assert($$('.cm-md-frontmatter')[0].textContent === '---' && $$('.cm-md-frontmatter')[3].textContent === '---', 'Front matter source not shown while editing it');
+    blur(); await tick();
+    assert(!app.getHTML().includes('My note') && app.getHTML().includes('Real heading'), 'Front matter rendered in the output');
+    assert(document.querySelector('#word-count').textContent === '4 words', 'Front matter counted as words: ' + document.querySelector('#word-count').textContent);
+    app.load({ name: 'Rule.md', text: '---\nNot front matter, a rule.\n' }); blur(); await tick();
+    assert(!document.querySelector('.cm-md-frontmatter') && document.querySelector('.cm-md-hr'), 'A leading rule became front matter');
+  });
+  await test('Pasted HTML becomes Markdown only when it has structure', async () => {
+    const paste = (html, plain) => {
+      const data = new DataTransfer();
+      if (html) data.setData('text/html', html);
+      data.setData('text/plain', plain);
+      view.contentDOM.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    };
+    const pasted = (html, plain, before = '') => {
+      app.load({ name: 'Paste.md', text: before });
+      view.dispatch({ selection: { anchor: view.state.doc.length } });
+      paste(html, plain);
+      return view.state.doc.toString().slice(before.length);
+    };
+    const page = '<meta charset="utf-8"><h2>Title</h2><p>Some <strong>bold</strong> and <a href="https://example.com/a">a link</a>.</p><ul><li>One<ul><li>Nested</li></ul></li><li>Two</li></ul><ol><li>First</li></ol><table><tr><td>A</td><td>B</td></tr><tr><td>1</td><td>2</td></tr></table>';
+    const markdown = pasted(page, 'Title Some bold and a link. One Nested Two First A B 1 2');
+    assert(markdown.startsWith('## Title\n\nSome **bold** and [a link](https://example.com/a).\n\n- One\n  - Nested\n- Two\n\n1. First'), 'Web page not converted: ' + JSON.stringify(markdown));
+    assert(/\|\s*A\s*\|\s*B\s*\|/.test(markdown) && !markdown.includes('<table'), 'Table not converted: ' + JSON.stringify(markdown));
+    const code = 'const total = price * count; // _not_ emphasis';
+    assert(pasted('<meta charset="utf-8"><div style="color: #d4d4d4;"><div><span style="color: #569cd6;">const</span> total = price * count; // _not_ emphasis</div></div>', code) === code, 'Code editor HTML was converted');
+    assert(pasted(null, 'plain *text* stays') === 'plain *text* stays', 'Plain text paste changed');
+    assert(pasted('<a href="https://example.com">https://example.com</a>', 'https://example.com') === 'https://example.com', 'A pasted URL was converted');
+    const docs = '<b style="font-weight:normal;" id="docs-internal-guid-1"><span style="font-weight:700;">Bold</span><span> and </span><span style="font-style:italic;">italic</span></b>';
+    assert(pasted(docs, 'Bold and italic') === '**Bold** and *italic*', 'Google Docs emphasis wrong: ' + JSON.stringify(pasted(docs, 'Bold and italic')));
+    assert(pasted('<p><strong>bold</strong></p>', 'bold', '```\n') === 'bold', 'Paste inside a code block was converted');
+    app.load({ name: 'Plain.md', text: '' });
+    app.command('pastePlain', '<b>not html</b> **as is**');
+    assert(view.state.doc.toString() === '<b>not html</b> **as is**', 'Paste and Match Style changed the text');
+  });
   await test('Task checkboxes edit the task text', async () => {
     app.load({ text: '- [ ] One\n- [x] Two\n', name: 'Tasks.md' }); blur(); await tick();
     $$('.cm-md-task')[0].click(); await tick();

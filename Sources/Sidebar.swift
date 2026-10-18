@@ -94,7 +94,7 @@ final class SidebarRowView: NSTableRowView {
     }
 }
 
-final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSMenuDelegate {
     static let defaultWidth: CGFloat = 244
     static let accent = NSColor(name: "MarginAccent") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -108,6 +108,11 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     var onCloseOpenFile: (String) -> Void = { _ in }
     var onOpenPath: (String) -> Void = { _ in }
     var onReveal: (Int) -> Void = { _ in }
+    // A folder path to create a file in, and a file path with its new name.
+    var onNewFile: (String) -> Void = { _ in }
+    var onRename: (String, String) -> Void = { _, _ in }
+    private(set) var renamingPath: String?
+    private var renameCancelled = false
     // new, open, openFolder, refreshFolder, or toggleSidebar.
     var onAction: (String) -> Void = { _ in }
 
@@ -162,6 +167,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         filesView.dataSource = self; filesView.delegate = self
         filesView.target = self; filesView.action = #selector(filesClicked(_:))
         filesView.indentationPerLevel = 12
+        filesView.menu = NSMenu()
+        filesView.menu?.delegate = self
         filesView.setAccessibilityLabel("Files")
         filesScroll.documentView = filesView
         filesScroll.hasVerticalScroller = true; filesScroll.drawsBackground = false; filesScroll.borderType = .noBorder
@@ -257,6 +264,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     private func reloadFiles() {
         guard isViewLoaded else { return }
+        // Rebuilding would end the rename in progress; it happens once the rename ends.
+        guard renamingPath == nil else { return }
         let query = state.filter.trimmingCharacters(in: .whitespaces).lowercased()
         var nodes: [SidebarNode] = []
         if !openFiles.isEmpty {
@@ -428,7 +437,83 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     @objc private func openFolderClicked(_ sender: Any?) { onAction("openFolder") }
     @objc private func newClicked(_ sender: Any?) { onAction("new") }
     @objc private func openClicked(_ sender: Any?) { onAction("open") }
-    func controlTextDidChange(_ notification: Notification) { state.filter = filterField.stringValue }
+    func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSSearchField === filterField { state.filter = filterField.stringValue }
+    }
+
+    // MARK: New file and rename
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard filesView.clickedRow >= 0, let node = filesView.item(atRow: filesView.clickedRow) as? SidebarNode else { return }
+        func add(_ title: String, _ run: @escaping () -> Void) {
+            let item = NSMenuItem(title: title, action: #selector(runMenuItem(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = run; menu.addItem(item)
+        }
+        switch node.kind {
+        case let .header(_, workspace) where workspace:
+            if let folder { add("New File") { [weak self] in self?.onNewFile(folder.path) } }
+        case let .folder(entry, _):
+            add("New File") { [weak self] in self?.onNewFile(entry.path) }
+            menu.addItem(.separator())
+            add("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)]) }
+        case let .file(entry):
+            add("New File") { [weak self] in self?.onNewFile((entry.path as NSString).deletingLastPathComponent) }
+            add("Rename") { [weak self] in self?.beginRename(path: entry.path) }
+            menu.addItem(.separator())
+            add("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)]) }
+        default: break
+        }
+    }
+    @objc private func runMenuItem(_ sender: NSMenuItem) { (sender.representedObject as? () -> Void)?() }
+    // Edits the file's name in its row, with the name before the extension selected.
+    func beginRename(path: String) {
+        guard isViewLoaded, renamingPath == nil else { return }
+        var ancestor = (path as NSString).deletingLastPathComponent
+        while let folder, ancestor.hasPrefix(folder.path + "/") {
+            if let node = node(forPath: ancestor), case let .folder(entry, depth) = node.kind, !state.isExpanded(entry, depth: depth) { state.setExpanded(true, folder: entry, depth: depth) }
+            ancestor = (ancestor as NSString).deletingLastPathComponent
+        }
+        reloadFiles()
+        guard let node = node(forPath: path), case .file = node.kind else { return }
+        let row = filesView.row(forItem: node)
+        guard row >= 0, let cell = filesView.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView, let field = cell.textField else { return }
+        filesView.scrollRowToVisible(row)
+        renamingPath = path; renameCancelled = false
+        field.isEditable = true; field.delegate = self
+        view.window?.makeFirstResponder(field)
+        let name = field.stringValue as NSString
+        field.currentEditor()?.selectedRange = NSRange(location: 0, length: name.deletingPathExtension.count)
+    }
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard renamingPath != nil, control !== filterField, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        renameCancelled = true
+        view.window?.makeFirstResponder(filesView)
+        return true
+    }
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let path = renamingPath, let field = notification.object as? NSTextField, field !== filterField else { return }
+        finishRename(path: path, name: field.stringValue, cancelled: renameCancelled)
+    }
+    // The row goes back to a label either way; a successful rename then refreshes the tree.
+    func finishRename(path: String, name: String, cancelled: Bool = false) {
+        renamingPath = nil
+        reloadFiles()
+        if !cancelled, name != (path as NSString).lastPathComponent { onRename(path, name) }
+    }
+    private func node(forPath path: String) -> SidebarNode? {
+        func find(_ nodes: [SidebarNode]) -> SidebarNode? {
+            for node in nodes {
+                switch node.kind {
+                case let .file(entry) where entry.path == path: return node
+                case let .folder(entry, _) where entry.path == path: return node
+                default: if let found = find(node.children) { return found }
+                }
+            }
+            return nil
+        }
+        return find(roots)
+    }
     private func reloadSelectionSoon() { DispatchQueue.main.async { [weak self] in self?.reloadFiles() } }
 
     // MARK: Inspection for tests

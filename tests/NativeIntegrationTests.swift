@@ -264,6 +264,17 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(items.contains { $0.title == "Zoom In" && $0.isHidden && $0.keyEquivalent == "=" && $0.allowsKeyEquivalentWhenHidden }, "⌘= does not zoom in")
             try expect(shortcut("Body")! == ("0", [.command, .option]), "Body is not on ⌥⌘0")
             try expect(shortcut("Find and Replace…")! == ("f", [.command, .option]) && shortcut("Go to Line…")! == ("l", [.command]), "Find and Replace or Go to Line shortcut is wrong")
+            try expect(shortcut("Quick Open…")! == ("p", [.command, .option]) && shortcut("Paste and Match Style")! == ("v", [.command, .option, .shift]), "Quick Open or Paste and Match Style shortcut is wrong")
+            try expect(shortcut("Print / Save as PDF…")! == ("p", [.command]), "Print lost ⌘P")
+        }
+        test("Quick open matches names fuzzily, ranking word starts and prefixes first") {
+            let names = ["Planning notes.md", "api-strategy-session.md", "Plan.md", "explain.md"]
+            let items = names.map { QuickOpenItem(name: $0, detail: "notes", target: .file(URL(fileURLWithPath: "/notes/" + $0))) }
+            try expect(QuickOpenRanking.rank(items, query: "").map(\.name) == names, "An empty query reordered the files")
+            try expect(QuickOpenRanking.rank(items, query: "plan").map(\.name) == ["Plan.md", "Planning notes.md", "explain.md"], "Prefix matches not first: \(QuickOpenRanking.rank(items, query: "plan").map(\.name))")
+            try expect(QuickOpenRanking.rank(items, query: "ass").first?.name == "api-strategy-session.md", "Word starts not preferred")
+            try expect(QuickOpenRanking.rank(items, query: "notes/plan").first?.name == "Plan.md" || QuickOpenRanking.rank(items, query: "notes/plan").first?.name == "Planning notes.md", "Folder not searched")
+            try expect(QuickOpenRanking.rank(items, query: "zzz").isEmpty, "A non-matching query matched")
         }
         test("Settings window choices update the stored settings") {
             let settings = Settings(defaults: settingsDefaults)
@@ -416,6 +427,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             defer { for doc in controller.documents { doc.close() } }
             guard let editorA = a.editorController, let windowA = editorA.window else { throw CocoaError(.fileReadUnknown) }
             try expect(windowA.styleMask.contains(.fullSizeContentView) && windowA.titleVisibility == .hidden, "Editor window does not extend under a hidden title")
+            try expect(windowA.firstResponder === editorA.webView, "Typing goes to \(String(describing: windowA.firstResponder)), not the document")
             try waitUntil { editorA.canSynchronize }
             var state = ""
             func poll(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("[getComputedStyle(document.documentElement).getPropertyValue('--titlebar-inset').trim(), document.body.classList.contains('tab-bar')].join(' ')") { result, _ in state = result as? String ?? "" } }
@@ -528,6 +540,93 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             editor.sidebar.activateHeading(row: 1)
             var head = -1
             try waitUntil { editor.webView.evaluateJavaScript("app.view.state.selection.main.head") { result, _ in head = result as? Int ?? -1 }; return head == editor.sidebar.headings[1].pos }
+        }
+        test("Quick open lists tabs and workspace files, opens a file as a tab, and switches to an open one") {
+            let saved = delegate.workspace
+            delegate.workspace = root
+            defer { delegate.workspace = saved }
+            var scanned = false
+            delegate.refreshFolders { scanned = true }
+            try waitUntil { scanned }
+            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
+            defer { for doc in controller.documents { doc.close() } }
+            guard let editor = a.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editor.canSynchronize }
+            window.makeKeyAndOrderFront(nil)
+            let names = delegate.quickOpenItems(for: editor).map(\.name)
+            try expect(names.first == "Untitled.md" && names.contains("A real file.md") && names.contains("Another.markdown") && Set(names).count == names.count, "Unexpected candidates: \(names)")
+            delegate.showQuickOpen(for: editor)
+            guard let picker = delegate.quickOpen else { throw CocoaError(.fileReadUnknown) }
+            try expect(picker.panel.isVisible && picker.panel.parent === window, "Quick open did not appear over the window")
+            picker.search("anoth")
+            try expect(picker.results.first?.name == "Another.markdown", "Search did not find the file")
+            picker.choose(row: 0)
+            try expect(!picker.panel.isVisible && delegate.quickOpen == nil, "Quick open stayed open")
+            try waitUntil { (controller.documents.first { $0.fileURL?.resolvingSymlinksInPath() == second.resolvingSymlinksInPath() } as? MarkdownDocument)?.editorController?.window.map { window.tabbedWindows?.contains($0) == true } == true }
+            try waitUntil { window.tabGroup?.selectedWindow !== window }
+            delegate.showQuickOpen(for: editor)
+            guard let again = delegate.quickOpen else { throw CocoaError(.fileReadUnknown) }
+            again.search("untitled")
+            again.choose(row: 0)
+            try waitUntil { window.tabGroup?.selectedWindow === window }
+        }
+        test("The sidebar creates a file in a folder, opens it, and renames files in place") {
+            let folder = root.appendingPathComponent("Rename tests", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let plain = folder.appendingPathComponent("plain.md"), taken = folder.appendingPathComponent("taken.md"), open = folder.appendingPathComponent("open.md")
+            for url in [plain, taken, open] { try "# \(url.lastPathComponent)\n".write(to: url, atomically: true, encoding: .utf8) }
+            let saved = delegate.workspace
+            delegate.workspace = root
+            defer { delegate.workspace = saved }
+            var scanned = false
+            delegate.refreshFolders { scanned = true }
+            try waitUntil { scanned }
+            @MainActor func rename(_ url: URL, _ name: String) throws -> Error? {
+                var result: Error??
+                delegate.renameWorkspaceFile(url, to: name) { result = .some($0) }
+                try waitUntil { result != nil }
+                return result!
+            }
+            try expect(try rename(plain, "Renamed") == nil && FileManager.default.fileExists(atPath: folder.appendingPathComponent("Renamed.md").path) && !FileManager.default.fileExists(atPath: plain.path), "Renaming a closed file failed")
+            try expect(try rename(taken, "Renamed.md") != nil && FileManager.default.fileExists(atPath: taken.path), "A rename replaced an existing file")
+            for bad in ["", "a/b", ".hidden"] { try expect(try rename(taken, bad) != nil, "Accepted the name “\(bad)”") }
+            try expect(try rename(taken, "Taken") == nil && (try FileManager.default.contentsOfDirectory(atPath: folder.path)).contains("Taken.md"), "A change of letter case failed")
+
+            var opened: MarkdownDocument?
+            controller.openDocument(withContentsOf: open, display: true) { document, _, _ in opened = document as? MarkdownDocument }
+            try waitUntil { opened?.editorController?.canSynchronize == true }
+            guard let doc = opened, let editor = doc.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            defer { for doc in controller.documents { doc.close() } }
+            doc.edited("# Unsaved edits\n")
+            try waitUntil { doc.isDocumentEdited }
+            let moved = folder.appendingPathComponent("moved.md")
+            try expect(try rename(open, "moved") == nil, "Renaming an open file failed")
+            try expect(doc.fileURL?.standardizedFileURL == moved.standardizedFileURL && doc.isDocumentEdited && doc.text == "# Unsaved edits\n", "The open document did not follow its file or lost its edits")
+            var name = ""
+            try waitUntil { editor.webView.evaluateJavaScript("document.querySelector('#document-name').textContent") { result, _ in name = result as? String ?? "" }; return name == "moved.md" }
+
+            // The sidebar names files by the paths in the scanned tree.
+            guard let treeFolder = delegate.workspaceTree?.children?.first(where: { $0.name == "Rename tests" })?.path else { throw CocoaError(.fileReadUnknown) }
+            let treeMoved = treeFolder + "/moved.md"
+            let sidebar = editor.sidebar
+            try waitUntil { sidebar.visibleTreeRows.contains { $0.hasSuffix("moved.md") } }
+            sidebar.beginRename(path: treeMoved)
+            try expect(sidebar.renamingPath == treeMoved && window.firstResponder is NSTextView, "Rename did not start editing the row")
+            sidebar.finishRename(path: treeMoved, name: "ignored", cancelled: true)
+            try expect(doc.fileURL?.lastPathComponent == "moved.md" && sidebar.renamingPath == nil, "Cancelling a rename renamed the file")
+
+            let before = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
+            sidebar.onNewFile(treeFolder)
+            let created = URL(fileURLWithPath: treeFolder + "/Untitled.md")
+            try waitUntil { FileManager.default.fileExists(atPath: created.path) }
+            try waitUntil { (controller.documents.first { $0.fileURL?.standardizedFileURL == created.standardizedFileURL } as? MarkdownDocument)?.editorController?.sidebar.renamingPath == created.path }
+            try expect(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)).subtracting(before) == ["Untitled.md"], "New File did not create one Untitled.md")
+            guard let newEditor = (controller.documents.first { $0.fileURL?.standardizedFileURL == created.standardizedFileURL } as? MarkdownDocument)?.editorController else { throw CocoaError(.fileReadUnknown) }
+            try expect(newEditor.window.map { window.tabbedWindows?.contains($0) == true } == true, "The new file did not open as a tab")
+            newEditor.sidebar.finishRename(path: created.path, name: "Fresh note")
+            try waitUntil { FileManager.default.fileExists(atPath: folder.appendingPathComponent("Fresh note.md").path) && newEditor.doc.fileURL?.lastPathComponent == "Fresh note.md" }
         }
         test("Edits announce a change to the open files only when the document becomes unsaved") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument

@@ -13,7 +13,7 @@
   const welcome = '# A little room to think.\n\nWelcome to **Margin**. A quiet place for your notes, ideas, and everything in between.\n\n## Just start writing\n\nYour words take shape as you type. Use Markdown shortcuts for headings, **bold**, *italics*, and lists — the formatting appears right here on the page.\n\n> The secret of getting ahead is getting started.\n\n## Make yourself at home\n\n- Open a Markdown file with **⌘O**\n- Browse a folder with **⇧⌘O**\n- Switch to source mode with **⌘/**\n- Save your work with **⌘S**\n\n### A few things to try\n\n- [x] Find a little space to write\n- [ ] Put an idea into words\n- [ ] Make something worth keeping\n\n## For the details\n\nCode, tables, links, and images all have a place here.\n\n```swift\nlet thought = "Something worth writing down."\nprint(thought)\n```\n\n| Shortcut | A small superpower |\n| --- | --- |\n| ⌘B | A little emphasis |\n| ⌘F | Find the right words |\n\n---\n\nTake your time. The page is yours.\n';
   const { EditorState, EditorSelection, ChangeSet, Compartment, Annotation, Prec, EditorView, keymap, placeholder, drawSelection,
     defaultKeymap, indentWithTab, markdown, markdownLanguage, codeLanguages, syntaxTree, ensureSyntaxTree, syntaxHighlighting, languageDataProp,
-    tags, tagHighlighter, closeBrackets, closeBracketsKeymap,
+    tags, tagHighlighter, closeBrackets, closeBracketsKeymap, yamlLanguage, parseMixed,
     unifiedMergeView, getChunks, getOriginalDoc, originalDocChangeEffect } = MarginEditor;
   let raw = native ? '' : sessionStorage.getItem('margin-draft') ?? welcome;
   let sourceMode = false;
@@ -54,9 +54,40 @@
       if (text) view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length }, userEvent: 'input.paste' });
     });
   }
+  // Front matter is a block of its own, parsed as YAML, so its closing "---" does not
+  // turn the YAML above it into a heading.
+  const fm = MarginMarkdown.frontmatter;
+  const frontmatterSyntax = {
+    defineNodes: [{ name: 'Frontmatter', block: true }, 'FrontmatterMark', 'FrontmatterContent'],
+    parseBlock: [{
+      name: 'Frontmatter',
+      before: 'HorizontalRule',
+      parse(cx, line) {
+        if (cx.lineStart !== 0 || !fm.open.test(line.text) || !fm.key.test(cx.peekLine())) return false;
+        const children = [cx.elt('FrontmatterMark', 0, line.text.length)];
+        let contentFrom = -1, end = line.text.length, closed = false;
+        while (cx.nextLine()) {
+          const from = cx.lineStart, to = from + line.text.length;
+          if (fm.close.test(line.text)) {
+            if (contentFrom >= 0) children.push(cx.elt('FrontmatterContent', contentFrom, end));
+            children.push(cx.elt('FrontmatterMark', from, to));
+            end = to; closed = true; cx.nextLine();
+            break;
+          }
+          if (contentFrom < 0) contentFrom = from;
+          end = to;
+        }
+        // Without a closing line it runs to the end of the document.
+        if (!closed && contentFrom >= 0) children.push(cx.elt('FrontmatterContent', contentFrom, end));
+        cx.addElement(cx.elt('Frontmatter', 0, end, children));
+        return true;
+      },
+    }],
+    wrap: parseMixed(node => node.name === 'FrontmatterContent' ? { parser: yamlLanguage.parser } : null),
+  };
   // GFM Markdown with list continuation on Enter, pasting a URL over text as a link,
   // and fenced code parsed in the language its info string names.
-  const markdownSupport = markdown({ base: markdownLanguage, codeLanguages, completeHTMLTags: false });
+  const markdownSupport = markdown({ base: markdownLanguage, codeLanguages, completeHTMLTags: false, extensions: frontmatterSyntax });
   // Single quotes are left out because they are usually apostrophes in prose.
   const markdownBrackets = markdownSupport.language.data.of({ closeBrackets: { brackets: ['(', '[', '{', '"', '`'] } });
   // Typing an emphasis marker over a selection wraps it rather than replacing it.
@@ -119,8 +150,15 @@
       EditorView.domEventHandlers({
         paste(event) {
           const files = imageFiles(event.clipboardData?.files);
-          if (!files.length) return false;
-          event.preventDefault(); insertImages(files, view.state.selection.main.from); return true;
+          if (files.length) { event.preventDefault(); insertImages(files, view.state.selection.main.from); return true; }
+          // Code keeps the plain text.
+          const at = syntaxTree(view.state).resolve(view.state.selection.main.from, -1);
+          for (let node = at; node; node = node.parent) if (['FencedCode', 'CodeBlock', 'InlineCode', 'Frontmatter'].includes(node.name)) return false;
+          const markdown = MarginMarkdown.fromHTML(event.clipboardData?.getData('text/html'), event.clipboardData?.getData('text/plain'));
+          if (markdown === null) return false;
+          event.preventDefault();
+          insertText(markdown);
+          return true;
         },
         drop(event) {
           const files = imageFiles(event.dataTransfer?.files);
@@ -146,6 +184,15 @@
     ] }),
   });
 
+  function insertText(text) {
+    view.dispatch(view.state.replaceSelection(text), { userEvent: 'input.paste', scrollIntoView: true });
+  }
+  // Paste and Match Style goes to a focused field, such as Find, or else the document.
+  function pastePlain(text) {
+    const field = document.activeElement;
+    if (field?.matches?.('input, textarea, [contenteditable]') && !view.contentDOM.contains(field)) document.execCommand('insertText', false, text);
+    else { insertText(text); view.focus(); }
+  }
   function toast(message) {
     clearTimeout(toastTimer);
     $('#toast').textContent = message;
@@ -307,7 +354,7 @@
     const result = [];
     tree.iterate({ enter(node) {
       // Fenced code is parsed in its own language, which may itself be Markdown.
-      if (node.name === 'FencedCode' || node.name === 'CodeBlock') return false;
+      if (['FencedCode', 'CodeBlock', 'Frontmatter'].includes(node.name)) return false;
       const match = /^(?:ATX|Setext)Heading(\d)$/.exec(node.name);
       if (!match) return;
       const firstLine = state.doc.lineAt(node.from);
@@ -553,6 +600,7 @@
     else if (name === 'format') format(value);
     else if (name === 'diskChanged') setDiskText(value);
     else if (name === 'toast') toast(value);
+    else if (name === 'pastePlain' && typeof value === 'string') pastePlain(value);
   }
   document.addEventListener('click', event => {
     const actionButton = event.target.closest('[data-action]');

@@ -370,6 +370,10 @@ body.tab-bar #modified-dot {
   padding-bottom:10px
 }
 
+#editor .cm-md-frontmatter {
+  color:var(--muted)
+}
+
 #editor .cm-md-fence-hidden,#editor .cm-md-setext-underline {
   font-size:0;
   line-height:0
