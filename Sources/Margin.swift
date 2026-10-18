@@ -46,14 +46,17 @@ final class MarkdownDocument: NSDocument {
     var editorName: String { fileURL?.lastPathComponent ?? recoveredName ?? "Untitled.md" }
     override class var autosavesInPlace: Bool { true }
     override var fileURL: URL? { didSet { NotificationCenter.default.post(name: .openFilesChanged, object: self) } }
+    // Every edit updates the change count; the open files only show whether it is unsaved.
     override func updateChangeCount(_ change: NSDocument.ChangeType) {
+        let wasEdited = isDocumentEdited
         super.updateChangeCount(change)
         if change == .changeDone, uncountedEdit { uncountedEdit = false; runSavesWaitingForEdit() }
-        NotificationCenter.default.post(name: .openFilesChanged, object: self)
+        if isDocumentEdited != wasEdited { NotificationCenter.default.post(name: .openFilesChanged, object: self) }
     }
     override func updateChangeCount(withToken changeCountToken: Any, for saveOperation: NSDocument.SaveOperationType) {
+        let wasEdited = isDocumentEdited
         super.updateChangeCount(withToken: changeCountToken, for: saveOperation)
-        NotificationCenter.default.post(name: .openFilesChanged, object: self)
+        if isDocumentEdited != wasEdited { NotificationCenter.default.post(name: .openFilesChanged, object: self) }
     }
 
     override func makeWindowControllers() {
@@ -400,8 +403,6 @@ final class MessageBridge: NSObject, WKScriptMessageHandler {
     }
 }
 
-// Markdown files dropped on the editor open as tabs; anything else, such as
-// images, still goes to WebKit for the editor's own drop handling.
 // The editor fills the window under the title bar, and the web view does not
 // move the window, so this strip over the title bar's height does.
 final class TitlebarDragView: NSView {
@@ -416,6 +417,8 @@ final class TitlebarDragView: NSView {
     }
 }
 
+// Markdown files dropped on the editor open as tabs; anything else, such as
+// images, still goes to WebKit for the editor's own drop handling.
 final class EditorWebView: WKWebView {
     var onOpenFiles: (([URL]) -> Void)?
     // WebKit registers its own editing undo on the responder chain's undo
@@ -502,6 +505,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     private var sidebarStateObserver: NSObjectProtocol?
     private var applyingSidebarState = false
     private var failureView: NSView?
+    private var sentTitlebar: (inset: CGFloat, tabBar: Bool)?
     var isShowingFailure: Bool { failureView != nil }
     var doc: MarkdownDocument { document as! MarkdownDocument }
     private var app: AppDelegate? { (NSDocumentController.shared as? DocumentController)?.app }
@@ -546,10 +550,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         // Set on the controller, after init: adopting the window replaces the
         // window's own autosave name with the controller's, which defaults to empty.
         windowFrameAutosaveName = "MarginEditor"
-        editorContainer.onTopInsetChange = { [weak self] _ in
-            guard let self else { return }
-            self.send("titlebar", self.titlebarPayload())
-        }
+        editorContainer.onTopInsetChange = { [weak self] _ in self?.sendTitlebar() }
         webView.onOpenFiles = { [weak self] urls in
             guard let self, let window = self.window else { return }
             self.app?.open(urls, asTabsIn: window)
@@ -695,11 +696,12 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         assets.root = (doc.fileURL ?? doc.recoveredOriginalURL)?.deletingLastPathComponent()
         var payload: [String: Any] = ["text": doc.text, "token": token, "name": doc.editorName, "path": doc.fileURL?.path ?? "", "modified": doc.isDocumentEdited]
         if let zoom = app?.settings.textZoom { payload["textZoom"] = zoom }
-        payload["titlebar"] = titlebarPayload()
+        let titlebar = titlebarState()
+        payload["titlebar"] = ["inset": titlebar.inset, "tabBar": titlebar.tabBar]
+        sentTitlebar = titlebar
         payload["sidebarOpen"] = !sidebarItem.isCollapsed
         if let notice { payload["notice"] = notice }
         sidebar.currentPath = doc.fileURL?.path ?? ""
-        updateFolder(app?.folderPayload())
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
             evaluate("window.app.load(\(String(decoding: data, as: UTF8.self)))")
@@ -746,7 +748,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         case "new": app?.newDocument(nil)
         case "open": NSDocumentController.shared.openDocument(nil)
         case "openFolder": app?.openFolder(nil)
-        case "refreshFolder": app?.refreshFolders()
         case "save": doc.save(nil)
         case "diskReload": doc.confirmReloadFromDisk()
         case "diskKeepMine": doc.keepMine()
@@ -807,17 +808,23 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     }
     // The height the title bar and tab bar cover at the top of the editor, and
     // whether the tab bar is showing the document's name.
-    func titlebarPayload() -> [String: Any] {
-        guard let window else { return ["inset": CGFloat(0), "tabBar": false] }
+    func titlebarState() -> (inset: CGFloat, tabBar: Bool) {
+        guard let window else { return (0, false) }
         // Reading tabGroup before the window is shown would give it a group of its own.
-        return ["inset": editorContainer.safeAreaInsets.top, "tabBar": hasBeenShown && window.tabGroup?.isTabBarVisible == true]
+        return (editorContainer.safeAreaInsets.top, hasBeenShown && window.tabGroup?.isTabBarVisible == true)
+    }
+    private func sendTitlebar() {
+        let titlebar = titlebarState()
+        guard canSynchronize, sentTitlebar.map({ $0 != titlebar }) ?? true else { return }
+        sentTitlebar = titlebar
+        send("titlebar", ["inset": titlebar.inset, "tabBar": titlebar.tabBar])
     }
     func sendOpenFiles() {
         observeTabGroup()
         sidebar.setOpenFiles(tabDocuments.map { tab in
             OpenFileEntry(id: tab.recoveryID.uuidString, name: tab.editorName, path: tab.fileURL?.path ?? "", modified: tab.isDocumentEdited, current: tab === document)
         })
-        send("titlebar", titlebarPayload())
+        sendTitlebar()
     }
     // MARK: Sidebar
     private func connectSidebar() {
@@ -848,6 +855,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             guard let self, !self.applyingSidebarState, !self.sidebarItem.isCollapsed, self.sidebarWidth > 0 else { return }
             self.sidebar.state.width = self.sidebarWidth
         }
+        sidebar.setFolder(app?.workspaceTree)
         observeSidebarState()
         applySidebarState(animated: false)
     }
@@ -875,7 +883,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     var sidebarWidth: CGFloat { splitController.splitView.arrangedSubviews.first?.frame.width ?? 0 }
     func toggleSidebar() { sidebar.state.collapsed.toggle() }
     func showOutline() { sidebar.state.collapsed = false; sidebar.state.mode = .outline }
-    func updateFolder(_ payload: [String: Any]?) { sidebar.setFolder(payload.flatMap(FolderEntry.init(payload:))) }
     // Workspace clicks may name only Markdown files inside the open folder.
     func openWorkspaceFile(_ path: String) {
         guard let folder = app?.workspace, let window else { return }
@@ -979,6 +986,9 @@ class DocumentController: NSDocumentController {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var workspace: URL?
+    // The workspace's Markdown files as of the last scan, shared by every sidebar.
+    private(set) var workspaceTree: FolderEntry?
+    private var workspaceScan = 0
     var controller: DocumentController!
     let recoveryStore: RecoveryStore
     let settings: Settings
@@ -1005,6 +1015,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applySettings()
         if let path = UserDefaults.standard.string(forKey: "workspace"), FileManager.default.fileExists(atPath: path) { workspace = URL(fileURLWithPath: path) }
     }
+    // Files added in other applications show up when Margin comes back to the front.
+    func applicationDidBecomeActive(_ notification: Notification) { refreshFolders() }
     func applicationDidFinishLaunching(_ notification: Notification) {
         launchFinished = true
         if #available(macOS 14, *) { NSApp?.activate() } else { NSApp?.activate(ignoringOtherApps: true) }
@@ -1128,13 +1140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.refreshFolders()
         }
     }
-    func folderPayload() -> [String: Any]? {
-        guard let workspace else { return nil }
+    static func scanFolder(_ workspace: URL) -> FolderEntry {
         var budget = 5000
-        func entries(_ url: URL, depth: Int) -> [[String: Any]] {
+        func entries(_ url: URL, depth: Int) -> [FolderEntry] {
             guard depth < 12, budget > 0,
                   let children = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
-            var result = [[String: Any]]()
+            var result = [FolderEntry]()
             for child in children.sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
                 guard budget > 0 else { break }
                 guard let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]), values.isSymbolicLink != true else { continue }
@@ -1142,16 +1153,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if values.isDirectory == true {
                     if ["node_modules", "vendor", "build", "dist", "DerivedData"].contains(child.lastPathComponent) { continue }
                     let nested = entries(child, depth: depth + 1)
-                    if !nested.isEmpty { result.append(["name": child.lastPathComponent, "path": child.path, "children": nested]) }
-                } else if markdownExtensions.contains(child.pathExtension.lowercased()) { result.append(["name": child.lastPathComponent, "path": child.path]) }
+                    if !nested.isEmpty { result.append(FolderEntry(name: child.lastPathComponent, path: child.path, children: nested)) }
+                } else if markdownExtensions.contains(child.pathExtension.lowercased()) { result.append(FolderEntry(name: child.lastPathComponent, path: child.path, children: nil)) }
             }
-            return result.sorted { ($0["children"] != nil ? 0 : 1) < ($1["children"] != nil ? 0 : 1) }
+            return result.sorted { ($0.children != nil ? 0 : 1) < ($1.children != nil ? 0 : 1) }
         }
-        return ["name": workspace.lastPathComponent, "path": workspace.path, "children": entries(workspace, depth: 0)]
+        return FolderEntry(name: workspace.lastPathComponent, path: workspace.path, children: entries(workspace, depth: 0))
     }
-    func refreshFolders() {
-        guard let payload = folderPayload() else { return }
-        for doc in controller.documents { (doc as? MarkdownDocument)?.editorController?.updateFolder(payload) }
+    // Scans off the main thread; only the newest scan's result is kept.
+    func refreshFolders(completion: @escaping () -> Void = {}) {
+        guard let workspace else { completion(); return }
+        workspaceScan += 1
+        let scan = workspaceScan
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let tree = Self.scanFolder(workspace)
+            DispatchQueue.main.async {
+                defer { completion() }
+                guard let self, scan == self.workspaceScan, tree != self.workspaceTree else { return }
+                self.workspaceTree = tree
+                for doc in self.controller.documents { (doc as? MarkdownDocument)?.editorController?.sidebar.setFolder(tree) }
+            }
+        }
     }
     @objc func webCommand(_ sender: NSMenuItem) {
         guard let action = sender.representedObject as? String else { return }

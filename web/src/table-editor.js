@@ -278,5 +278,5 @@
     ignoreEvent() { return true; }
   }
 
-  window.MarginTables = { TableWidget, sourceTables, showSource, parseRow };
+  window.MarginTables = { TableWidget, sourceTables };
 })();

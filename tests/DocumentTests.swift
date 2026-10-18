@@ -216,9 +216,7 @@ import UniformTypeIdentifiers
             try "# Hidden".write(to: root.appendingPathComponent(".hidden.md"), atomically: true, encoding: .utf8)
             try "Other".write(to: root.appendingPathComponent("ignore.csv"), atomically: true, encoding: .utf8)
             try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("linked.md"), withDestinationURL: root.appendingPathComponent("Visible.md"))
-            let delegate = AppDelegate(); delegate.workspace = root
-            let children = delegate.folderPayload()?["children"] as? [[String: Any]] ?? []
-            let names = children.compactMap { $0["name"] as? String }
+            let names = (AppDelegate.scanFolder(root).children ?? []).map(\.name)
             try expect(names.contains("Visible.md") && !names.contains(".hidden.md") && !names.contains("ignore.csv") && !names.contains("linked.md"), "Folder filtering failed")
         }
         if failures > 0 { exit(1) }

@@ -12,7 +12,7 @@ Requires macOS 13 or later and Xcode Command Line Tools. No production package i
 
 The built application is `build/Margin.app`. Open it directly or copy it into Applications. It is signed locally for development, and built for the current Mac's architecture. Distribution signing and notarization are not configured.
 
-After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keeps an already-running copy in memory; rebuilding its bundle does not replace that process. Version 0.1.5 uses the Margin name throughout, with app identifier `com.infiniteviewtech.margin`. The welcome appears only when no documents are restored, recovered, or opening. Window restoration follows the macOS “Close windows when quitting an application” setting.
+After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding does not replace a copy that is already running. Window restoration follows the macOS “Close windows when quitting an application” setting.
 
 ## Included
 
@@ -48,54 +48,35 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app. macOS keep
 | ⇧⌘L | Toggle sidebar |
 | ⌘P | Print / Save as PDF |
 
-Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open as tabs in the current window. The sidebar's Open Files section lists that window's tabs; click one to switch to it, or × to close it with the usual unsaved-changes handling. Dropped images are still embedded in the document. The last workspace, appearance, app icon, and text zoom are remembered.
+Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open as tabs in the current window. In the sidebar's Open Files, click a tab to switch to it, or × to close it. The workspace list refreshes when Margin becomes the active app, or with its refresh button. The last workspace, appearance, app icon, and text zoom are remembered.
 
 ## Implementation
 
-- `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, menus, file panels, folder browsing, export/printing, and restricted local-image URL handler.
+- `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, editor windows and their bridge to the web editor, menus, file panels, workspace scanning, export/printing, and the restricted local-image URL handler.
+- `Sources/Sidebar.swift`: the native sidebar and the sidebar state shared by a window's tabs.
+- `Sources/Settings.swift`: stored settings and the Settings window.
+- `Sources/RecoveryStore.swift`: recovery copies of unsaved edits.
 - `web/src/app.js`: CodeMirror editor setup, bridge messages, navigation, search, formatting commands, and view state.
 - `web/src/live-preview.js`: the live preview, built from CodeMirror decorations over the Markdown syntax tree.
 - `web/src/table-editor.js`: the grid table editor, a CodeMirror widget that edits the table's Markdown text.
 - `web/src/markdown.js`: Markdown to sanitized HTML (markdown-it and DOMPurify) for export, printing, statistics, and table previews.
 - `web/src/style.css`: writing typography, application layout, themes, and print styles.
-- `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing, markdown-it, and DOMPurify), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
+- `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing and every CodeMirror code language, markdown-it, and DOMPurify), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
 - `tools/editor-bundle/` and `scripts/build-editor.sh` (`npm run build:editor`): rebuild the vendored bundle with Rollup. Only needed after changing the bundle entry or a dependency version, and the only step that needs `npm install` (Node.js 20 or later).
 - `Resources/`: editable welcome document, Info.plist, the bundle icon, and the icon choices in `Resources/Icons/`.
 - `scripts/build.sh`: compiles Swift, copies web assets into the app bundle, and applies an ad hoc signature.
 
 For Swift changes, rebuild the app. Web files are copied during every build. Run `./scripts/make-icon.sh` to regenerate the bundle icon and the icon choices from the Core Graphics source.
 
-## Verification
-
-The application builds with the installed Swift compiler. The default suite has 72 checks: sixteen app-bundle/native registration, settings, startup, recovery, and open-queue checks, sixteen document/filesystem/session/disk-change checks, and forty editor checks in WebKit: twenty-seven behavior checks and thirteen native bridge checks. Recovery tests exercise exact text persistence, corrupt drafts, failed writes, undo/redo, stale editor messages, and ordering of queued writes and cleanup. Disk-change tests cover reloading, keeping edits while periodic autosave waits, Keep mine, Reload, and matching or unreadable disk versions. Bridge tests cover initialization errors, unavailable browser storage, load acknowledgements, save snapshots, text from the app not being reported back as edits, undo keys reaching native undo, the outline sent to the sidebar and revealing a heading, the toolbar sidebar toggle, color scheme changes, the disk-change banner, and comparing with the disk version. The WebKit checks cover live preview rendering, markers appearing at the cursor, typed Markdown rendering, task checkboxes, grid table editing (cells, keyboard movement, the table menu, and Edit as Markdown), source mode, formatting commands, outline, search, sanitizing, export and print rendering, and that the page raises no uncaught errors. The bridge checks load the page in native mode against a recording message handler (`tests/bridge.setup.js`).
-
-With Node.js installed (used only for syntax checks; no packages are needed):
+## Tests
 
 ```sh
-npm test
+npm test               # syntax checks, native unit checks, and WebKit editor checks
+npm run test:native    # desktop checks: windows, tabs, the sidebar, open and save, files changed on disk
+npm run test:webkit    # WebKit editor checks only; writes build/editor-screenshot.png
 ```
 
-Building and running the app do not require Node.js or npm.
-
-For the 16 desktop checks — visible windows on launch and file opening, tabs and the open-files list, restored tabs, the sidebar (full height, state shared by tabs, the workspace tree and filter, the outline), the editor under the title bar, Markdown drops, ordered opens, editor undo, appearance and Dock icon, window frames, the native Open → edit → Save As → Save → reopen flow, files changed by another application, menu validation, and a simulated editor-process failure followed by retry — run this in a normal macOS desktop session:
-
-```sh
-npm run test:native
-```
-
-These checks need LaunchServices and desktop access and are explicitly skipped by the default sandbox-compatible suite. To send an actual file-opening event to the built app from a desktop Terminal:
-
-```sh
-open -a "$PWD/build/Margin.app" "$PWD/Resources/Welcome.md"
-```
-
-For real WebKit behavior checks and a screenshot:
-
-```sh
-npm run test:webkit
-```
-
-The WebKit runner writes `build/editor-screenshot.png`. In the development sandbox, desktop processes and LaunchServices metadata access are unavailable, so the full desktop checks, physical Dock drag-and-drop, visual appearance, native dialogs, and print output remain unverified here.
+Node.js is used only for the syntax checks in `npm test`; building and running the app do not need it. The desktop checks need a normal macOS desktop session.
 
 ## Errors and recovery
 
@@ -107,7 +88,7 @@ On launch, recovery copies open as unsaved documents named `Recovered …`, with
 
 When another application changes an open file, a document without unsaved changes reloads and shows "Reloaded from disk". One with unsaved changes keeps its text and shows a banner. Reload asks before discarding the edits. Keep mine saves the edits over the disk version without AppKit's "changed by another application" alert, which still appears if the file changes again before saving. Compare switches to source mode and shows the disk version above each changed part of your text; resolving the last change, or choosing Use disk version for all or Keep mine for all, saves the result. Cancel leaves the edits unsaved and the banner in place. A newer disk version during a comparison updates it in place. While the banner is unresolved, periodic autosave waits; closing or quitting still autosaves and shows AppKit's alert. macOS does not report another application's write that lands within about half a second of Margin's own save, so the app checks the file again 1.5 seconds after each save. Reloading clears the undo history.
 
-Save and Save As read a current editor snapshot before proceeding when the editor is available. Load identifiers and edit revisions prevent delayed messages from overwriting newer text. The native failure view explicitly saves only the last received version displayed there.
+Save and Save As read the editor's current text first when the editor is available. The failure view saves only the last text the app received, which it displays.
 
 ## First-version boundaries
 

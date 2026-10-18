@@ -419,7 +419,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { editorA.canSynchronize }
             var state = ""
             func poll(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("[getComputedStyle(document.documentElement).getPropertyValue('--titlebar-inset').trim(), document.body.classList.contains('tab-bar')].join(' ')") { result, _ in state = result as? String ?? "" } }
-            let single = Int(editorA.titlebarPayload()["inset"] as? CGFloat ?? 0)
+            let single = Int(editorA.titlebarState().inset)
             try expect(single > 0, "No title bar inset for a single tab")
             try waitUntil { poll(editorA); return state == "\(single)px false" }
             try expect(Int(editorA.titlebarDragView.frame.height) == single, "Drag strip does not cover the title bar: strip=\(editorA.titlebarDragView.frame) inset=\(single) superview=\(String(describing: editorA.titlebarDragView.superview?.frame))")
@@ -428,7 +428,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { windowA.tabbedWindows?.count == 2 }
             guard let editorB = b.editorController else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editorB.canSynchronize }
-            let tabbed = Int(editorB.titlebarPayload()["inset"] as? CGFloat ?? 0)
+            let tabbed = Int(editorB.titlebarState().inset)
             try expect(tabbed > single, "Tab bar did not add to the inset: \(single) → \(tabbed)")
             try waitUntil { poll(editorB); return state == "\(tabbed)px true" }
             try waitUntil { poll(editorA); return state.hasSuffix(" true") }
@@ -475,6 +475,9 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let saved = delegate.workspace
             delegate.workspace = root
             defer { delegate.workspace = saved }
+            var scanned = false
+            delegate.refreshFolders { scanned = true }
+            try waitUntil { scanned }
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
             defer { for doc in controller.documents { doc.close() } }
@@ -495,7 +498,23 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             guard let other = (controller.documents.first { $0.fileURL == second } as? MarkdownDocument)?.editorController else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { other.sidebar.state === sidebar.state && other.sidebar.visibleTreeRows.contains("Another.markdown") }
             try expect(!other.sidebar.visibleTreeRows.contains("  Deep note.md"), "The new tab did not keep the collapsed folder")
-            try expect(other.sidebar.openFileNames == sidebar.openFileNames && other.sidebar.currentOpenFileName == "Another.markdown", "Open files disagree between tabs")
+            try waitUntil { other.sidebar.openFileNames == sidebar.openFileNames && sidebar.openFileNames.count == 2 && other.sidebar.currentOpenFileName == "Another.markdown" }
+
+            // The tree is the last scan's: loading a document does not rescan, refreshing does.
+            let added = root.appendingPathComponent("Added later.md")
+            try "# Later\n".write(to: added, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: added) }
+            other.loadDocument()
+            try waitUntil { other.session.isLoaded }
+            try expect(!other.sidebar.visibleTreeRows.contains("Added later.md"), "Loading a document rescanned the workspace")
+            delegate.refreshFolders()
+            try waitUntil { sidebar.visibleTreeRows.contains("Added later.md") && other.sidebar.visibleTreeRows.contains("Added later.md") }
+
+            // Width changes, such as each step of a divider drag, keep the built rows.
+            let firstRow = other.sidebar.filesView.view(atColumn: 0, row: 0, makeIfNecessary: false)
+            other.sidebar.state.width += 10
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            try expect(firstRow != nil && other.sidebar.filesView.view(atColumn: 0, row: 0, makeIfNecessary: false) === firstRow, "A width change rebuilt the sidebar's rows")
         }
         test("The outline lists the document's headings and reveals one in the editor") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
@@ -509,6 +528,23 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             editor.sidebar.activateHeading(row: 1)
             var head = -1
             try waitUntil { editor.webView.evaluateJavaScript("app.view.state.selection.main.head") { result, _ in head = result as? Int ?? -1 }; return head == editor.sidebar.headings[1].pos }
+        }
+        test("Edits announce a change to the open files only when the document becomes unsaved") {
+            let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            doc.recoveryStore = recoveryStore
+            controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+            defer { doc.close() }
+            try waitUntil { doc.editorController?.session.isLoaded == true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            var posts = 0
+            let observer = NotificationCenter.default.addObserver(forName: .openFilesChanged, object: doc, queue: nil) { _ in posts += 1 }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            for text in ["# One\n", "# One two\n", "# One two three\n"] {
+                doc.edited(text)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            try waitUntil { doc.isDocumentEdited }
+            try expect(posts == 1, "Three edits announced \(posts) open-file changes")
         }
         test("Editor typing makes one document undo step and the undo key reverts it") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument

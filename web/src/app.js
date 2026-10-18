@@ -550,17 +550,13 @@
     else if (name === 'exportHTML') post('exportHTML', { html: exportHTML() });
     else if (name === 'print') post('print');
     else if (name === 'metadata') updateMetadata(value);
-    else if (name === 'saved') { $('#modified-dot').hidden = true; $('#save-status').textContent = 'Saved locally'; }
     else if (name === 'format') format(value);
     else if (name === 'diskChanged') setDiskText(value);
     else if (name === 'toast') toast(value);
   }
   document.addEventListener('click', event => {
     const actionButton = event.target.closest('[data-action]');
-    if (actionButton) {
-      const action = actionButton.dataset.action;
-      if (['exportHTML', 'print'].includes(action)) command(action); else post(action);
-    }
+    if (actionButton) command(actionButton.dataset.action);
     const formatButton = event.target.closest('[data-format]'); if (formatButton) format(formatButton.dataset.format);
     if (!event.target.closest('.popover,#format-button,#more-button')) closeMenus();
   });

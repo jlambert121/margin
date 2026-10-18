@@ -9,16 +9,10 @@ struct HeadingEntry: Equatable {
     let level: Int, text: String, pos: Int
 }
 
-// The workspace tree as AppDelegate.folderPayload describes it.
+// A workspace folder or Markdown file; files have no children.
 struct FolderEntry: Equatable {
     let name: String, path: String
     let children: [FolderEntry]?
-    init(name: String, path: String, children: [FolderEntry]?) { self.name = name; self.path = path; self.children = children }
-    init?(payload: [String: Any]) {
-        guard let name = payload["name"] as? String, let path = payload["path"] as? String else { return nil }
-        self.name = name; self.path = path
-        children = (payload["children"] as? [[String: Any]])?.compactMap(FolderEntry.init(payload:))
-    }
 }
 
 enum SidebarMode: Int { case files, outline }
@@ -109,7 +103,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     }
     // The darker accent in both appearances keeps white text on it readable.
     static let selection = NSColor(srgbRed: 0x53 / 255, green: 0x74 / 255, blue: 0x60 / 255, alpha: 1)
-    var state = SidebarState() { didSet { if state !== oldValue { observeState(); applyState() } } }
+    var state = SidebarState() { didSet { if state !== oldValue { appliedTree = nil; observeState(); applyState() } } }
     var onSelectOpenFile: (String) -> Void = { _ in }
     var onCloseOpenFile: (String) -> Void = { _ in }
     var onOpenPath: (String) -> Void = { _ in }
@@ -132,6 +126,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private let outlineEmpty = NSTextField(wrappingLabelWithString: "Add a heading to give your words a little structure.")
     private var roots: [SidebarNode] = []
     private var applyingExpansion = false
+    // The filter and opened folders the tree was last built with.
+    private var appliedTree: (filter: String, toggled: Set<String>)?
     private var stateObserver: NSObjectProtocol?
 
     deinit { if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) } }
@@ -252,7 +248,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         view.subviews.first { $0.identifier?.rawValue == "files" }?.isHidden = state.mode != .files
         view.subviews.first { $0.identifier?.rawValue == "outline" }?.isHidden = state.mode != .outline
         if filterField.stringValue != state.filter { filterField.stringValue = state.filter }
-        reloadFiles()
+        // Width and collapsing are in the state too, and change on every step of a divider drag.
+        if appliedTree.map({ $0.filter != state.filter || $0.toggled != state.toggledFolders }) ?? true { reloadFiles() }
         outlineEmpty.isHidden = !headings.isEmpty
     }
 
@@ -275,6 +272,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             nodes.append(SidebarNode(.openFolderPrompt))
         }
         roots = nodes
+        appliedTree = (state.filter, state.toggledFolders)
         applyingExpansion = true
         filesView.reloadData()
         func expand(_ nodes: [SidebarNode]) {
