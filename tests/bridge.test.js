@@ -24,22 +24,25 @@
     app.command('metadata', { name: 'Saved.md', path: '/notes/Saved.md', modified: true });
     assert(!document.querySelector('#modified-dot').hidden, 'Save incorrectly cleared newer unsaved edits');
   });
-  await test("Open files list this window's tabs and ask native to switch or close them", () => {
-    assert(document.querySelector('#open-files-section').hidden, 'Open files shown before native sent any');
-    app.command('openFiles', [
-      { id: 'one', name: 'Current.md', path: '/notes/Current.md', modified: false, current: true },
-      { id: 'two', name: 'Other.md', path: '/notes/Other.md', modified: true, current: false },
-    ]);
-    const rows = [...document.querySelectorAll('#open-files .open-file')];
-    assert(!document.querySelector('#open-files-section').hidden && rows.length === 2, 'Open files not listed');
-    assert(rows[0].classList.contains('active') && !rows[1].classList.contains('active'), 'Current tab not highlighted');
-    assert(!rows[0].querySelector('.open-file-modified') && rows[1].querySelector('.open-file-modified'), 'Unsaved marker wrong');
-    rows[1].querySelector('.open-file-name').click();
-    assert(messages.at(-1).action === 'selectOpenFile' && messages.at(-1).id === 'two', 'Selecting a file did not reach native');
-    rows[1].querySelector('.open-file-close').click();
-    assert(messages.at(-1).action === 'closeOpenFile' && messages.at(-1).id === 'two', 'Closing a file did not reach native');
-    app.command('openFiles', []);
-    assert(document.querySelector('#open-files-section').hidden, 'Empty open files list still shown');
+  await test('The outline goes to native when headings change, and native can reveal one', async () => {
+    const wait = () => new Promise(resolve => setTimeout(resolve, 150));
+    const outlines = () => messages.filter(message => message.action === 'outline');
+    app.load({ text: '# One\n\nText\n\n## Two\n', token: 'outline-load' }); await wait();
+    assert(JSON.stringify(outlines().at(-1)?.headings) === JSON.stringify([{ level: 1, text: 'One', pos: 0 }, { level: 2, text: 'Two', pos: 13 }]), 'Outline not sent: ' + JSON.stringify(outlines().at(-1)));
+    const count = outlines().length;
+    app.view.dispatch({ changes: { from: app.view.state.doc.length, insert: 'More text.\n' } }); await wait();
+    assert(outlines().length === count, 'An edit that kept the headings sent the outline again');
+    app.command('reveal', 13);
+    assert(app.view.state.selection.main.head === 13, 'Reveal did not move the cursor to the heading');
+  });
+  await test('The toolbar sidebar toggle shows only while the sidebar is collapsed and asks native to toggle', () => {
+    const toggle = document.querySelector('#toggle-sidebar');
+    app.command('sidebar', { open: true });
+    assert(getComputedStyle(toggle).display === 'none', 'Toolbar toggle shown beside an open sidebar');
+    app.command('sidebar', { open: false });
+    assert(getComputedStyle(toggle).display !== 'none', 'Toolbar toggle hidden while the sidebar is collapsed');
+    toggle.click();
+    assert(messages.at(-1).action === 'toggleSidebar', 'Toolbar toggle did not reach native');
   });
   await test('Undo keys in the document go to native undo instead of the editor histories', () => {
     app.load({ text: '# Keep me\n', token: 'undo-load' });
@@ -112,7 +115,9 @@
     assert(app.isSource() && app.isComparing(), 'Source mode turned off during a comparison');
     mousedown($('.cm-deletedChunk button[name=accept]')); await settle();
     assert(!app.isComparing() && !app.isSource() && $('#compare-bar').hidden && $('#disk-banner').hidden, 'Resolving the last change did not finish the comparison');
-    assert(messages.at(-1).action === 'diskKeepMine' && app.getMarkdown() === taken, 'Finishing did not save the merged text');
+    // The outline for the sidebar can follow the save.
+    const last = messages.filter(message => message.action !== 'outline').at(-1);
+    assert(last.action === 'diskKeepMine' && app.getMarkdown() === taken, 'Finishing did not save the merged text: ' + last.action);
     app.command('diskChanged', null);
   });
   await test('Use disk version for all and Keep mine for all finish and save, and Cancel changes nothing', async () => {

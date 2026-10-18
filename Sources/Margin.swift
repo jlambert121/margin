@@ -458,6 +458,28 @@ final class EditorWebView: WKWebView {
     }
 }
 
+// The editor's column, which reports when the title bar and tab bar over its
+// top change height: the tab bar appearing or hiding, or full screen.
+final class EditorContainerView: NSView {
+    var onTopInsetChange: (CGFloat) -> Void = { _ in }
+    private var reportedInset: CGFloat = -1
+    override func layout() {
+        super.layout()
+        guard safeAreaInsets.top != reportedInset else { return }
+        reportedInset = safeAreaInsets.top
+        onTopInsetChange(reportedInset)
+    }
+}
+
+// Reports divider drags, which NSSplitViewController's own delegate role hides.
+final class EditorSplitViewController: NSSplitViewController {
+    var onResize: () -> Void = {}
+    override func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        onResize()
+    }
+}
+
 final class EditorWindowController: NSWindowController, WKScriptMessageHandler, WKNavigationDelegate {
     let webView: EditorWebView
     let assets = AssetHandler()
@@ -471,9 +493,16 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     private var tabObservation: NSKeyValueObservation?
     private weak var observedTabGroup: NSWindowTabGroup?
     private var hasBeenShown = false
-    private let editorContainer = NSView()
+    private let editorContainer = EditorContainerView()
     let titlebarDragView = TitlebarDragView()
-    private var titlebarObservation: NSKeyValueObservation?
+    let sidebar = SidebarViewController()
+    let splitController = EditorSplitViewController()
+    let sidebarItem: NSSplitViewItem
+    private var collapseObservation: NSKeyValueObservation?
+    private var sidebarStateObserver: NSObjectProtocol?
+    private var applyingSidebarState = false
+    private var failureView: NSView?
+    var isShowingFailure: Bool { failureView != nil }
     var doc: MarkdownDocument { document as! MarkdownDocument }
     private var app: AppDelegate? { (NSDocumentController.shared as? DocumentController)?.app }
 
@@ -490,6 +519,10 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         window.isReleasedWhenClosed = false
         window.identifier = NSUserInterfaceItemIdentifier("MarkdownEditor")
         window.isRestorable = true
+        sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        sidebarItem.allowsFullHeightLayout = true
+        sidebarItem.canCollapse = true
+        sidebarItem.minimumThickness = 180; sidebarItem.maximumThickness = 420
         webView.translatesAutoresizingMaskIntoConstraints = false
         titlebarDragView.translatesAutoresizingMaskIntoConstraints = false
         editorContainer.addSubview(webView); editorContainer.addSubview(titlebarDragView)
@@ -497,9 +530,15 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             webView.topAnchor.constraint(equalTo: editorContainer.topAnchor), webView.bottomAnchor.constraint(equalTo: editorContainer.bottomAnchor),
             webView.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), webView.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor),
             titlebarDragView.topAnchor.constraint(equalTo: editorContainer.topAnchor),
+            titlebarDragView.bottomAnchor.constraint(equalTo: editorContainer.safeAreaLayoutGuide.topAnchor),
             titlebarDragView.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), titlebarDragView.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor)
         ])
-        window.contentView = editorContainer
+        let content = NSViewController()
+        content.view = editorContainer
+        splitController.splitViewItems = [sidebarItem, NSSplitViewItem(viewController: content)]
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 1180, height: 820)
+        window.contentViewController = splitController
+        window.setContentSize(NSSize(width: 1180, height: 820))
         window.center()
         window.tabbingMode = .preferred
         window.tabbingIdentifier = "MarginEditor"
@@ -507,18 +546,15 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         // Set on the controller, after init: adopting the window replaces the
         // window's own autosave name with the controller's, which defaults to empty.
         windowFrameAutosaveName = "MarginEditor"
-        let dragHeight = titlebarDragView.heightAnchor.constraint(equalToConstant: 0)
-        dragHeight.isActive = true
-        // Changes when the tab bar appears or hides and when entering or leaving full screen.
-        titlebarObservation = window.observe(\.contentLayoutRect, options: [.initial]) { [weak self] _, _ in
+        editorContainer.onTopInsetChange = { [weak self] _ in
             guard let self else { return }
-            dragHeight.constant = self.titlebarPayload()["inset"] as? CGFloat ?? 0
             self.send("titlebar", self.titlebarPayload())
         }
         webView.onOpenFiles = { [weak self] urls in
             guard let self, let window = self.window else { return }
             self.app?.open(urls, asTabsIn: window)
         }
+        connectSidebar()
         // NSDocument.addWindowController must attach us. Setting document here
         // makes AppKit treat that later call as redundant, so the document's
         // windowControllers stays empty and showWindows has nothing to show.
@@ -529,7 +565,10 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         DispatchQueue.main.async { [weak self] in self?.startEditor() }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit { loadTimeout?.cancel() }
+    deinit {
+        loadTimeout?.cancel()
+        if let sidebarStateObserver { NotificationCenter.default.removeObserver(sidebarStateObserver) }
+    }
     var canSynchronize: Bool { ready && session.isLoaded && !hasEditorFailure }
 
     private func startEditor() {
@@ -538,7 +577,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         _ = session.beginLoad()
         failureText = nil
         webView.isHidden = true
-        window?.contentView = editorContainer
+        failureView?.removeFromSuperview(); failureView = nil
         armLoadTimeout()
         guard let index = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "web") else {
             showEditorFailure("The editor files are missing from the application bundle.")
@@ -586,7 +625,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         alert.beginSheetModal(for: window)
     }
     private func showEditorFailure(_ message: String) {
-        guard !hasEditorFailure, document != nil, let window else { return }
+        guard !hasEditorFailure, document != nil, window != nil else { return }
         logger.error("\(message, privacy: .private)")
         hasEditorFailure = true; ready = false
         loadTimeout?.cancel(); loadTimeout = nil
@@ -614,7 +653,13 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         text.string = doc.text
         failureText = text; scroll.documentView = text
         view.addSubview(stack); view.addSubview(scroll)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        // Shown in place of the editor, below the title bar strip so the window still drags.
+        editorContainer.addSubview(view, positioned: .below, relativeTo: titlebarDragView)
+        failureView = view
         NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: editorContainer.safeAreaLayoutGuide.topAnchor), view.bottomAnchor.constraint(equalTo: editorContainer.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), view.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor),
             stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 36),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 36),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -36),
@@ -623,7 +668,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -36),
             scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -36)
         ])
-        window.contentView = view
+        webView.isHidden = true
         // NSTextView's initial frame must follow the laid-out scroll viewport.
         view.layoutSubtreeIfNeeded()
         text.setFrameSize(scroll.contentSize)
@@ -649,11 +694,12 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         armLoadTimeout()
         assets.root = (doc.fileURL ?? doc.recoveredOriginalURL)?.deletingLastPathComponent()
         var payload: [String: Any] = ["text": doc.text, "token": token, "name": doc.editorName, "path": doc.fileURL?.path ?? "", "modified": doc.isDocumentEdited]
-        if let folder = app?.folderPayload() { payload["folder"] = folder }
         if let zoom = app?.settings.textZoom { payload["textZoom"] = zoom }
         payload["titlebar"] = titlebarPayload()
+        payload["sidebarOpen"] = !sidebarItem.isCollapsed
         if let notice { payload["notice"] = notice }
-        payload["openFiles"] = openFilesPayload()
+        sidebar.currentPath = doc.fileURL?.path ?? ""
+        updateFolder(app?.folderPayload())
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
             evaluate("window.app.load(\(String(decoding: data, as: UTF8.self)))")
@@ -666,6 +712,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             guard let self else { return }
             self.assets.root = (self.doc.fileURL ?? self.doc.recoveredOriginalURL)?.deletingLastPathComponent()
             let name = self.doc.editorName
+            self.sidebar.currentPath = self.doc.fileURL?.path ?? ""
             self.send("metadata", ["name": name, "path": self.doc.fileURL?.path ?? "", "modified": self.doc.isDocumentEdited])
         }
     }
@@ -706,15 +753,13 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         case "saveAs": doc.saveAs(nil)
         case "print": printDocument(nil)
         case "exportHTML": if let html = body["html"] as? String { exportHTML(html) }
-        case "openPath":
-            if let path = body["path"] as? String, let folder = app?.workspace {
-                let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
-                let root = folder.standardizedFileURL.resolvingSymlinksInPath()
-                guard url.path.hasPrefix(root.path + "/"), markdownExtensions.contains(url.pathExtension.lowercased()), let window else { return }
-                app?.open([url], asTabsIn: window)
+        case "toggleSidebar": toggleSidebar()
+        case "outline":
+            let headings = (body["headings"] as? [[String: Any]] ?? []).compactMap { item -> HeadingEntry? in
+                guard let level = item["level"] as? Int, let text = item["text"] as? String, let pos = item["pos"] as? Int else { return nil }
+                return HeadingEntry(level: level, text: text, pos: pos)
             }
-        case "selectOpenFile": selectTab(id: body["id"] as? String)
-        case "closeOpenFile": closeTab(id: body["id"] as? String)
+            sidebar.setHeadings(headings)
         case "openExternal":
             if let string = body["url"] as? String, let url = URL(string: string), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
         default: break
@@ -737,6 +782,8 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     private func observeTabGroup() {
         guard hasBeenShown, let group = window?.tabGroup, group !== observedTabGroup else { return }
         observedTabGroup = group
+        sidebar.state = SidebarStates.state(for: group, current: sidebar.state)
+        observeSidebarState()
         tabObservation = group.observe(\.windows) { [weak self] _, _ in
             NotificationCenter.default.post(name: .openFilesChanged, object: self)
         }
@@ -762,19 +809,80 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     // whether the tab bar is showing the document's name.
     func titlebarPayload() -> [String: Any] {
         guard let window else { return ["inset": CGFloat(0), "tabBar": false] }
-        let inset = max(0, window.frame.height - window.contentLayoutRect.maxY)
         // Reading tabGroup before the window is shown would give it a group of its own.
-        return ["inset": inset, "tabBar": hasBeenShown && window.tabGroup?.isTabBarVisible == true]
-    }
-    private func openFilesPayload() -> [[String: Any]] {
-        tabDocuments.map { tab in
-            ["id": tab.recoveryID.uuidString, "name": tab.editorName, "path": tab.fileURL?.path ?? "", "modified": tab.isDocumentEdited, "current": tab === document]
-        }
+        return ["inset": editorContainer.safeAreaInsets.top, "tabBar": hasBeenShown && window.tabGroup?.isTabBarVisible == true]
     }
     func sendOpenFiles() {
         observeTabGroup()
-        send("openFiles", openFilesPayload())
+        sidebar.setOpenFiles(tabDocuments.map { tab in
+            OpenFileEntry(id: tab.recoveryID.uuidString, name: tab.editorName, path: tab.fileURL?.path ?? "", modified: tab.isDocumentEdited, current: tab === document)
+        })
         send("titlebar", titlebarPayload())
+    }
+    // MARK: Sidebar
+    private func connectSidebar() {
+        sidebar.onSelectOpenFile = { [weak self] id in self?.selectTab(id: id) }
+        sidebar.onCloseOpenFile = { [weak self] id in self?.closeTab(id: id) }
+        sidebar.onOpenPath = { [weak self] path in self?.openWorkspaceFile(path) }
+        sidebar.onReveal = { [weak self] pos in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.webView)
+            self.send("reveal", pos)
+        }
+        sidebar.onAction = { [weak self] action in
+            switch action {
+            case "new": self?.app?.newDocument(nil)
+            case "open": NSDocumentController.shared.openDocument(nil)
+            case "openFolder": self?.app?.openFolder(nil)
+            case "refreshFolder": self?.app?.refreshFolders()
+            case "toggleSidebar": self?.toggleSidebar()
+            default: break
+            }
+        }
+        collapseObservation = sidebarItem.observe(\.isCollapsed, options: [.new]) { [weak self] item, _ in
+            guard let self else { return }
+            self.send("sidebar", ["open": !item.isCollapsed])
+            if !self.applyingSidebarState { self.sidebar.state.collapsed = item.isCollapsed }
+        }
+        splitController.onResize = { [weak self] in
+            guard let self, !self.applyingSidebarState, !self.sidebarItem.isCollapsed, self.sidebarWidth > 0 else { return }
+            self.sidebar.state.width = self.sidebarWidth
+        }
+        observeSidebarState()
+        applySidebarState(animated: false)
+    }
+    private func observeSidebarState() {
+        if let sidebarStateObserver { NotificationCenter.default.removeObserver(sidebarStateObserver) }
+        sidebarStateObserver = NotificationCenter.default.addObserver(forName: .sidebarStateChanged, object: sidebar.state, queue: .main) { [weak self] _ in
+            self?.applySidebarState(animated: self?.window?.isKeyWindow == true)
+        }
+        applySidebarState(animated: false)
+    }
+    // Tabs in the background follow the visible one without animating.
+    private func applySidebarState(animated: Bool) {
+        let state = sidebar.state
+        applyingSidebarState = true
+        defer { applyingSidebarState = false }
+        if sidebarItem.isCollapsed != state.collapsed {
+            if animated { sidebarItem.animator().isCollapsed = state.collapsed } else { sidebarItem.isCollapsed = state.collapsed }
+        }
+        if !state.collapsed, abs(sidebarWidth - state.width) > 0.5, splitController.splitView.arrangedSubviews.count > 1 {
+            splitController.splitView.setPosition(state.width, ofDividerAt: 0)
+        }
+    }
+    // The pane's width, which the divider position sets. The sidebar's own view
+    // can sit inset within it.
+    var sidebarWidth: CGFloat { splitController.splitView.arrangedSubviews.first?.frame.width ?? 0 }
+    func toggleSidebar() { sidebar.state.collapsed.toggle() }
+    func showOutline() { sidebar.state.collapsed = false; sidebar.state.mode = .outline }
+    func updateFolder(_ payload: [String: Any]?) { sidebar.setFolder(payload.flatMap(FolderEntry.init(payload:))) }
+    // Workspace clicks may name only Markdown files inside the open folder.
+    func openWorkspaceFile(_ path: String) {
+        guard let folder = app?.workspace, let window else { return }
+        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        let root = folder.standardizedFileURL.resolvingSymlinksInPath()
+        guard url.path.hasPrefix(root.path + "/"), markdownExtensions.contains(url.pathExtension.lowercased()) else { return }
+        app?.open([url], asTabsIn: window)
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated {
@@ -1034,7 +1142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if values.isDirectory == true {
                     if ["node_modules", "vendor", "build", "dist", "DerivedData"].contains(child.lastPathComponent) { continue }
                     let nested = entries(child, depth: depth + 1)
-                    if !nested.isEmpty { result.append(["name": child.lastPathComponent, "children": nested]) }
+                    if !nested.isEmpty { result.append(["name": child.lastPathComponent, "path": child.path, "children": nested]) }
                 } else if markdownExtensions.contains(child.pathExtension.lowercased()) { result.append(["name": child.lastPathComponent, "path": child.path]) }
             }
             return result.sorted { ($0["children"] != nil ? 0 : 1) < ($1["children"] != nil ? 0 : 1) }
@@ -1043,7 +1151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func refreshFolders() {
         guard let payload = folderPayload() else { return }
-        for doc in controller.documents { (doc as? MarkdownDocument)?.editorController?.send("folder", payload) }
+        for doc in controller.documents { (doc as? MarkdownDocument)?.editorController?.updateFolder(payload) }
     }
     @objc func webCommand(_ sender: NSMenuItem) {
         guard let action = sender.representedObject as? String else { return }
@@ -1051,6 +1159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         currentEditor?.send(parts[0], parts.count > 1 ? parts[1] : nil)
     }
     @objc func exportHTML(_ sender: Any?) { currentEditor?.send("exportHTML") }
+    @objc func toggleSidebar(_ sender: Any?) { currentEditor?.toggleSidebar() }
+    @objc func showOutline(_ sender: Any?) { currentEditor?.showOutline() }
     @objc func zoomIn(_ sender: Any?) { setTextZoom(settings.zoomedIn()) }
     @objc func zoomOut(_ sender: Any?) { setTextZoom(settings.zoomedOut()) }
     @objc func actualSize(_ sender: Any?) { setTextZoom(1) }
@@ -1131,7 +1241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let format = menu("Format")
         command(format, "Bold", "format:bold", "b"); command(format, "Italic", "format:italic", "i"); command(format, "Strikethrough", "format:strike"); command(format, "Inline Code", "format:code"); format.addItem(.separator()); command(format, "Link…", "format:link", "k"); command(format, "Image…", "format:image")
         let view = menu("View")
-        command(view, "Toggle Sidebar", "sidebar", "l", modifiers: [.command, .shift]); command(view, "Document Outline", "outline"); command(view, "Source Mode", "source", "/"); view.addItem(.separator())
+        item(view, "Toggle Sidebar", #selector(toggleSidebar(_:)), "l", modifiers: [.command, .shift], target: self); item(view, "Document Outline", #selector(showOutline(_:)), target: self); command(view, "Source Mode", "source", "/"); view.addItem(.separator())
         item(view, "Actual Size", #selector(actualSize(_:)), "0", target: self); item(view, "Zoom In", #selector(zoomIn(_:)), "+", target: self); item(view, "Zoom Out", #selector(zoomOut(_:)), "-", target: self)
         // ⌘= also zooms in, as in browsers, without a second visible item.
         item(view, "Zoom In", #selector(zoomIn(_:)), "=", target: self); view.items.last?.isHidden = true; view.items.last?.allowsKeyEquivalentWhenHidden = true

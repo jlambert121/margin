@@ -7,7 +7,7 @@
     if (native) window.webkit.messageHandlers.native.postMessage({ action, ...payload });
     else if (action === 'changed') sessionStorage.setItem('margin-draft', payload.text);
     else if (action === 'openExternal') window.open(payload.url, '_blank', 'noopener');
-    else if (action === 'undo' || action === 'redo') return;
+    else if (['undo', 'redo', 'outline'].includes(action)) return;
     else toast('Open the macOS app to use native file operations.');
   };
   const welcome = '# A little room to think.\n\nWelcome to **Margin**. A quiet place for your notes, ideas, and everything in between.\n\n## Just start writing\n\nYour words take shape as you type. Use Markdown shortcuts for headings, **bold**, *italics*, and lists — the formatting appears right here on the page.\n\n> The secret of getting ahead is getting started.\n\n## Make yourself at home\n\n- Open a Markdown file with **⌘O**\n- Browse a folder with **⇧⌘O**\n- Switch to source mode with **⌘/**\n- Save your work with **⌘S**\n\n### A few things to try\n\n- [x] Find a little space to write\n- [ ] Put an idea into words\n- [ ] Make something worth keeping\n\n## For the details\n\nCode, tables, links, and images all have a place here.\n\n```swift\nlet thought = "Something worth writing down."\nprint(thought)\n```\n\n| Shortcut | A small superpower |\n| --- | --- |\n| ⌘B | A little emphasis |\n| ⌘F | Find the right words |\n\n---\n\nTake your time. The page is yours.\n';
@@ -21,8 +21,6 @@
   let currentName = '';
   let documentToken = null;
   let editRevision = 0;
-  let folder = null;
-  let openFiles = [];
   let toastTimer;
   let refreshTimer;
   let activeMatch = -1;
@@ -173,7 +171,7 @@
       $('#word-count').textContent = `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'}`;
       $('#word-count').title = `${raw.length.toLocaleString()} characters · ${raw.split('\n').length.toLocaleString()} lines`;
       $('#reading-time').textContent = `${Math.max(1, Math.ceil(words / 225))} min read`;
-      renderOutline();
+      postOutline();
     }, 80);
   }
   // Reloading the same document (such as after native undo) applies only the
@@ -206,9 +204,7 @@
     $('#document-name').title = currentPath || 'Untitled document';
     $('#modified-dot').hidden = !data.modified;
     $('#save-status').textContent = data.modified ? 'Edited' : currentPath ? 'Saved locally' : 'Ready to write';
-    if (data.folder) { folder = data.folder; renderFiles(); }
-    else if (folder) renderFiles();
-    if (Array.isArray(data.openFiles)) { openFiles = data.openFiles; renderOpenFiles(); }
+    if (typeof data.sidebarOpen === 'boolean') document.body.classList.toggle('sidebar-open', data.sidebarOpen);
     if (data.textZoom != null) setTextZoom(Number(data.textZoom));
     if (data.titlebar) setTitlebar(data.titlebar);
     refresh();
@@ -293,7 +289,6 @@
     $('#document-name').title = currentPath || 'Untitled document';
     $('#modified-dot').hidden = !data.modified;
     $('#save-status').textContent = data.modified ? 'Edited' : 'Saved locally';
-    renderFiles();
   }
   // Source mode is the same editor with the live preview layer switched off.
   function toggleSource(force) {
@@ -326,72 +321,13 @@
     view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y, yMargin: 40 }) });
     view.focus();
   }
-  function renderOutline() {
-    const nav = $('#outline');
-    nav.replaceChildren();
-    const found = headings();
-    if (!found.length) {
-      const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = 'Add a heading to give your words a little structure.'; nav.append(empty);
-    }
-    for (const heading of found) {
-      const button = document.createElement('button');
-      button.textContent = heading.text; button.title = heading.text;
-      button.style.paddingLeft = `${12 + (heading.level - 1) * 12}px`;
-      button.onclick = () => revealPosition(heading.pos, 'start');
-      nav.append(button);
-    }
-  }
-  function showTab(which) {
-    for (const tab of ['files', 'outline']) {
-      $(`#${tab}-tab`).setAttribute('aria-selected', String(which === tab));
-      $(`#${tab}-panel`).hidden = which !== tab;
-    }
-  }
-  function renderFiles() {
-    const tree = $('#file-tree'); tree.replaceChildren();
-    $('#empty-workspace').hidden = Boolean(folder);
-    $('#file-filter').hidden = !folder;
-    $('#refresh-folder').hidden = !folder;
-    $('#folder-name').textContent = folder?.name?.toUpperCase() || 'WORKSPACE';
-    if (!folder) return;
-    const query = $('#file-filter').value.toLowerCase();
-    function add(entries, parent, depth = 0) {
-      let count = 0;
-      for (const entry of entries) {
-        if (entry.children) {
-          const details = document.createElement('details'); details.className = 'tree-folder'; details.open = Boolean(query) || depth === 0;
-          const summary = document.createElement('summary'); summary.textContent = entry.name; details.append(summary);
-          const children = document.createElement('div'); children.style.paddingLeft = '12px';
-          if (add(entry.children, children, depth + 1)) { details.append(children); parent.append(details); count++; }
-        } else if (!query || entry.name.toLowerCase().includes(query)) {
-          const button = document.createElement('button'); button.className = `file-row${entry.path === currentPath ? ' active' : ''}`;
-          const icon = document.createElement('span'); icon.className = 'file-icon'; icon.textContent = '≡';
-          const name = document.createElement('span'); name.textContent = entry.name;
-          button.append(icon, name); button.title = entry.path;
-          button.onclick = () => post('openPath', { path: entry.path }); parent.append(button); count++;
-        }
-      }
-      return count;
-    }
-    if (!add(folder.children, tree)) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = query ? 'No matching files.' : 'No Markdown files in this folder.'; tree.append(empty); }
-  }
-  function renderOpenFiles() {
-    const list = $('#open-files'); list.replaceChildren();
-    $('#open-files-section').hidden = !openFiles.length;
-    for (const file of openFiles) {
-      const row = document.createElement('div'); row.className = `file-row open-file${file.current ? ' active' : ''}`;
-      const select = document.createElement('button'); select.className = 'open-file-name'; select.title = file.path || file.name;
-      if (file.current) select.setAttribute('aria-current', 'page');
-      const icon = document.createElement('span'); icon.className = 'file-icon'; icon.textContent = '≡';
-      const name = document.createElement('span'); name.className = 'open-file-label'; name.textContent = file.name;
-      select.append(icon, name);
-      if (file.modified) { const dot = document.createElement('span'); dot.className = 'open-file-modified'; dot.textContent = '●'; dot.title = 'Unsaved changes'; select.append(dot); }
-      select.onclick = () => post('selectOpenFile', { id: file.id });
-      const close = document.createElement('button'); close.className = 'open-file-close'; close.textContent = '×';
-      close.title = `Close ${file.name}`; close.setAttribute('aria-label', `Close ${file.name}`);
-      close.onclick = () => post('closeOpenFile', { id: file.id });
-      row.append(select, close); list.append(row);
-    }
+  // The native sidebar lists the outline; only send it when it changes.
+  let sentOutline = '';
+  function postOutline() {
+    const outline = JSON.stringify(headings());
+    if (outline === sentOutline) return;
+    sentOutline = outline;
+    post('outline', { headings: JSON.parse(outline) });
   }
   function setTypewriter() {
     const on = document.body.classList.toggle('typewriter');
@@ -603,8 +539,8 @@
   function command(name, value) {
     if (name === 'source' && comparing) toast('Finish or cancel the comparison to leave source mode.');
     else if (name === 'source') toggleSource();
-    else if (name === 'sidebar') document.body.classList.toggle('no-sidebar');
-    else if (name === 'outline') { document.body.classList.remove('no-sidebar'); showTab('outline'); }
+    else if (name === 'sidebar') document.body.classList.toggle('sidebar-open', Boolean(value?.open));
+    else if (name === 'reveal') revealPosition(Number(value), 'start');
     else if (name === 'find') showFind();
     else if (name === 'replace') showFind(true);
     else if (name === 'goToLine') showGoToLine();
@@ -615,8 +551,6 @@
     else if (name === 'print') post('print');
     else if (name === 'metadata') updateMetadata(value);
     else if (name === 'saved') { $('#modified-dot').hidden = true; $('#save-status').textContent = 'Saved locally'; }
-    else if (name === 'folder') { folder = value; renderFiles(); }
-    else if (name === 'openFiles') { openFiles = Array.isArray(value) ? value : []; renderOpenFiles(); }
     else if (name === 'format') format(value);
     else if (name === 'diskChanged') setDiskText(value);
     else if (name === 'toast') toast(value);
@@ -645,7 +579,7 @@
     else if (key === '/') command('source');
     else if (key === 'f' && !event.shiftKey) command('find');
     else if (key === 'l' && !event.shiftKey) command('goToLine');
-    else if (key === 'l' && event.shiftKey) command('sidebar');
+    else if (key === 'l' && event.shiftKey) post('toggleSidebar');
     else if (/^[1-6]$/.test(key)) format(`h${key}`);
     else if (key === 's') post(event.shiftKey ? 'saveAs' : 'save');
     else if (key === 'o') post(event.shiftKey ? 'openFolder' : 'open');
@@ -653,13 +587,10 @@
     else handled = false;
     if (handled) { event.preventDefault(); event.stopPropagation(); }
   }, true);
-  $('#toggle-sidebar').onclick = () => command('sidebar');
+  $('#toggle-sidebar').onclick = () => post('toggleSidebar');
   $('#source-button').onclick = () => command('source');
   $('#format-button').onclick = () => openMenu('#format-menu', '#format-button');
   $('#more-button').onclick = () => openMenu('#view-menu', '#more-button');
-  $('#files-tab').onclick = () => showTab('files'); $('#outline-tab').onclick = () => showTab('outline');
-  $('#file-filter').oninput = renderFiles;
-  $('#refresh-folder').onclick = () => post('refreshFolder');
   $('#typewriter-button').onclick = () => command('typewriter');
   $('#word-count').onclick = () => toast($('#word-count').title);
   $('#find-input').oninput = () => { activeMatch = -1; find(); };
@@ -679,12 +610,12 @@
   $('#compare-keep-mine').onclick = finishComparison;
   $('#compare-cancel').onclick = cancelComparison;
   const snapshot = () => ({ text: raw, token: documentToken, revision: editRevision });
-  window.app = { load: loadDocument, command, getMarkdown: () => raw, snapshot, getHTML: () => MarginMarkdown.renderDocument(raw), view, isSource: () => sourceMode, isComparing: () => Boolean(comparing), preparePrint, welcome };
+  window.app = { load: loadDocument, command, getMarkdown: () => raw, snapshot, getHTML: () => MarginMarkdown.renderDocument(raw), headings, view, isSource: () => sourceMode, isComparing: () => Boolean(comparing), preparePrint, welcome };
   // Resolves local images through the restricted native asset handler, while keeping
   // the Markdown URLs themselves relative and portable.
   if (native) {
     const base = document.createElement('base'); base.href = 'markdown-asset://local/'; document.head.append(base);
   }
-  renderFiles(); refresh();
+  refresh();
   if (native) post('ready');
 })();

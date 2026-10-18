@@ -9,22 +9,6 @@
 </head>
 <body>
 <div id="app">
-<aside id="sidebar" aria-label="Document navigation">
-  <div class="sidebar-title"><span class="app-mark" aria-hidden="true">m</span><span>Margin</span></div>
-  <div class="tabs" role="tablist" aria-label="Sidebar view">
-    <button id="files-tab" role="tab" aria-selected="true">Files</button>
-    <button id="outline-tab" role="tab" aria-selected="false">Outline</button>
-  </div>
-  <div id="files-panel" role="tabpanel" aria-labelledby="files-tab">
-    <section id="open-files-section" aria-labelledby="open-files-heading" hidden><div id="open-files-heading" class="folder-heading">OPEN FILES</div><div id="open-files"></div></section>
-    <div class="folder-heading"><span id="folder-name">WORKSPACE</span><button id="refresh-folder" class="icon-button" title="Refresh folder" aria-label="Refresh folder">↻</button></div>
-    <input id="file-filter" type="search" placeholder="Filter files…" aria-label="Filter files">
-    <div id="file-tree"></div>
-    <div id="empty-workspace"><div class="folder-symbol">▱</div><strong>Your words, in one place.</strong><p>Open a folder to browse your<br>Markdown files.</p><button class="secondary" data-action="openFolder">Open Folder… <kbd>⇧⌘O</kbd></button></div>
-  </div>
-  <div id="outline-panel" role="tabpanel" aria-labelledby="outline-tab" hidden><div class="folder-heading">ON THIS PAGE</div><nav id="outline" aria-label="Document outline"></nav></div>
-  <div class="sidebar-footer"><button data-action="new" title="New document (⌘N)">＋ <span>New document</span></button><button data-action="open" class="icon-button" title="Open file (⌘O)" aria-label="Open file">↗</button></div>
-</aside>
 <main>
   <header id="toolbar">
     <div class="toolbar-left"><button id="toggle-sidebar" class="icon-button" title="Toggle sidebar (⇧⌘L)" aria-label="Toggle sidebar"><svg viewBox="0 0 20 20"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M7.5 4v12"/></svg></button><span class="divider"></span><span id="document-name">Untitled.md</span><span id="modified-dot" title="Unsaved changes" hidden>●</span></div>

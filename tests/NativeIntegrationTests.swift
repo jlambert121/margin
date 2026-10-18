@@ -346,7 +346,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(editorA.tabDocuments.map(\.recoveryID) == editorB.tabDocuments.map(\.recoveryID), "Tabs disagree about their group")
             try waitUntil { editorB.canSynchronize && editorA.canSynchronize }
             var listed = -1
-            func pollListed(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("document.querySelectorAll('#open-files .open-file').length") { result, _ in listed = result as? Int ?? -1 } }
+            func pollListed(_ editor: EditorWindowController) { listed = editor.sidebar.openFileNames.count }
             try waitUntil { pollListed(editorB); return listed == 2 }
 
             delegate.open([first], asTabsIn: windowA)
@@ -369,7 +369,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { opened(second)?.editorController?.window.map { windowA.tabbedWindows?.contains($0) == true } == true }
 
             var names = ""
-            func pollNames(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("[...document.querySelectorAll('#open-files .open-file-label')].map(e => e.textContent).join('|')") { result, _ in names = result as? String ?? "" } }
+            func pollNames(_ editor: EditorWindowController) { names = editor.sidebar.openFileNames.joined(separator: "|") }
             func tabNames() -> String { (windowA.tabGroup?.windows ?? []).map { ($0.windowController?.document as? MarkdownDocument)?.editorName ?? "?" }.joined(separator: "|") }
             guard let group = windowA.tabGroup, let last = group.windows.last else { throw CocoaError(.fileReadUnknown) }
             group.removeWindow(last); group.insertWindow(last, at: 0)
@@ -408,7 +408,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(editorA.tabDocuments.count == 2 && editorB.tabDocuments.count == 2, "Restored tabs list only themselves")
             try waitUntil { editorA.canSynchronize && editorB.canSynchronize }
             var listed = -1
-            try waitUntil { editorA.webView.evaluateJavaScript("document.querySelectorAll('#open-files .open-file').length") { result, _ in listed = result as? Int ?? -1 }; return listed == 2 }
+            try waitUntil { listed = editorA.sidebar.openFileNames.count; return listed == 2 }
         }
         test("The editor fills the window under the title bar and hides its name beside a tab bar") {
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
@@ -422,7 +422,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let single = Int(editorA.titlebarPayload()["inset"] as? CGFloat ?? 0)
             try expect(single > 0, "No title bar inset for a single tab")
             try waitUntil { poll(editorA); return state == "\(single)px false" }
-            try expect(Int(editorA.titlebarDragView.frame.height) == single, "Drag strip does not cover the title bar")
+            try expect(Int(editorA.titlebarDragView.frame.height) == single, "Drag strip does not cover the title bar: strip=\(editorA.titlebarDragView.frame) inset=\(single) superview=\(String(describing: editorA.titlebarDragView.superview?.frame))")
             let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             b.recoveryStore = recoveryStore; controller.addDocument(b); b.makeWindowControllers(); b.showWindows()
             try waitUntil { windowA.tabbedWindows?.count == 2 }
@@ -432,6 +432,83 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(tabbed > single, "Tab bar did not add to the inset: \(single) → \(tabbed)")
             try waitUntil { poll(editorB); return state == "\(tabbed)px true" }
             try waitUntil { poll(editorA); return state.hasSuffix(" true") }
+        }
+        test("The sidebar runs the full window height and its tabs share collapse, width, and view") {
+            for key in ["sidebarCollapsed", "sidebarWidth"] { UserDefaults.standard.removeObject(forKey: key) }
+            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            for doc in [a, b] { doc.recoveryStore = recoveryStore; controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows() }
+            defer { for doc in controller.documents { doc.close() }; for key in ["sidebarCollapsed", "sidebarWidth"] { UserDefaults.standard.removeObject(forKey: key) } }
+            guard let editorA = a.editorController, let editorB = b.editorController, let windowA = editorA.window, let windowB = editorB.window else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { windowA.tabbedWindows?.count == 2 && editorA.canSynchronize && editorB.canSynchronize }
+            try expect(editorA.sidebar.state === editorB.sidebar.state, "Tabs do not share sidebar state")
+            let sideFrame = editorB.sidebar.view.convert(editorB.sidebar.view.bounds, to: nil)
+            try expect(sideFrame.maxY >= windowB.contentLayoutRect.maxY, "Sidebar starts below the tab bar")
+            try expect(Int(editorB.sidebarWidth) == Int(SidebarViewController.defaultWidth), "Unexpected sidebar width \(editorB.sidebarWidth)")
+            var open = ""
+            func pollOpen(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("String(document.body.classList.contains('sidebar-open'))") { result, _ in open = result as? String ?? "" } }
+            try waitUntil { pollOpen(editorB); return open == "true" }
+
+            editorB.toggleSidebar()
+            try waitUntil { editorB.sidebarItem.isCollapsed && editorA.sidebarItem.isCollapsed }
+            try waitUntil { pollOpen(editorB); return open == "false" }
+            try waitUntil { pollOpen(editorA); return open == "false" }
+            editorA.showOutline()
+            try waitUntil { !editorA.sidebarItem.isCollapsed && !editorB.sidebarItem.isCollapsed && editorB.sidebar.state.mode == .outline }
+            try waitUntil { Int(editorB.sidebarWidth) == Int(SidebarViewController.defaultWidth) }
+            editorB.splitController.splitView.setPosition(300, ofDividerAt: 0)
+            try waitUntil { Int(editorB.sidebar.state.width) == 300 }
+            windowA.makeKeyAndOrderFront(nil)
+            try waitUntil { Int(editorA.sidebarWidth) == 300 && Int(editorB.sidebarWidth) == 300 }
+
+            windowA.moveTabToNewWindow(nil)
+            try waitUntil { windowA.tabGroup !== windowB.tabGroup && editorA.sidebar.state !== editorB.sidebar.state }
+            editorA.toggleSidebar()
+            try waitUntil { editorA.sidebarItem.isCollapsed }
+            try expect(!editorB.sidebarItem.isCollapsed && editorA.sidebar.state.mode == .outline, "A window moved out of the tabs still shares, or lost, its sidebar state")
+        }
+        test("The sidebar lists, filters, and opens workspace files, and remembers folders opened across tabs") {
+            let nested = root.appendingPathComponent("Nested", isDirectory: true)
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            try "# Deep\n".write(to: nested.appendingPathComponent("Deep note.md"), atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: nested) }
+            let saved = delegate.workspace
+            delegate.workspace = root
+            defer { delegate.workspace = saved }
+            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
+            defer { for doc in controller.documents { doc.close() } }
+            guard let editor = a.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editor.canSynchronize }
+            let sidebar = editor.sidebar
+            try waitUntil { sidebar.visibleTreeRows.contains("Nested/") }
+            try expect(sidebar.visibleTreeRows == ["Nested/", "  Deep note.md", "A real file.md", "Another.markdown"], "Unexpected tree: \(sidebar.visibleTreeRows)")
+            sidebar.state.filter = "deep"
+            try expect(sidebar.visibleTreeRows == ["Nested/", "  Deep note.md"], "Filter incorrect: \(sidebar.visibleTreeRows)")
+            sidebar.state.filter = "nothing like this"
+            try expect(sidebar.visibleTreeRows == ["(No matching files.)"], "No-match message missing: \(sidebar.visibleTreeRows)")
+            sidebar.state.filter = ""
+            sidebar.activateFile(row: sidebar.rowIndex(named: "Nested")!)
+            try expect(!sidebar.visibleTreeRows.contains("  Deep note.md") && sidebar.state.toggledFolders.contains { $0.hasSuffix("/Nested") }, "Collapsing a folder was not remembered")
+            sidebar.activateFile(row: sidebar.rowIndex(named: "Another.markdown")!)
+            try waitUntil { (controller.documents.first { $0.fileURL == second } as? MarkdownDocument)?.editorController?.window.map { window.tabbedWindows?.contains($0) == true } == true }
+            guard let other = (controller.documents.first { $0.fileURL == second } as? MarkdownDocument)?.editorController else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { other.sidebar.state === sidebar.state && other.sidebar.visibleTreeRows.contains("Another.markdown") }
+            try expect(!other.sidebar.visibleTreeRows.contains("  Deep note.md"), "The new tab did not keep the collapsed folder")
+            try expect(other.sidebar.openFileNames == sidebar.openFileNames && other.sidebar.currentOpenFileName == "Another.markdown", "Open files disagree between tabs")
+        }
+        test("The outline lists the document's headings and reveals one in the editor") {
+            let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            doc.recoveryStore = recoveryStore
+            doc.text = "# One\n\nText\n\n## Two\n\n```md\n# Not a heading\n```\n"
+            controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+            defer { doc.close() }
+            guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editor.sidebar.headings.map(\.text) == ["One", "Two"] }
+            try expect(editor.sidebar.headings.map(\.level) == [1, 2], "Heading levels wrong")
+            editor.sidebar.activateHeading(row: 1)
+            var head = -1
+            try waitUntil { editor.webView.evaluateJavaScript("app.view.state.selection.main.head") { result, _ in head = result as? Int ?? -1 }; return head == editor.sidebar.headings[1].pos }
         }
         test("Editor typing makes one document undo step and the undo key reverts it") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
@@ -511,10 +588,11 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { editor.session.isLoaded }
             editor.webViewWebContentProcessDidTerminate(editor.webView)
             try expect(editor.hasEditorFailure && doc.text == unsaved && doc.isDocumentEdited, "Process failure cleared native edits")
-            try expect(editor.window?.contentView !== editor.webView, "No native error fallback was shown")
+            try expect(editor.isShowingFailure && editor.webView.isHidden, "No native error fallback was shown")
             try expect(try recoveryStore.readAll().drafts.contains(where: { $0.id == doc.recoveryID && $0.text == unsaved }), "Failure did not checkpoint current edits")
             editor.perform(NSSelectorFromString("retryEditor:"), with: nil)
             try waitUntil { editor.session.isLoaded && !editor.hasEditorFailure }
+            try expect(!editor.isShowingFailure && !editor.webView.isHidden, "Retry left the error fallback in place of the editor")
             var result: String?
             editor.webView.evaluateJavaScript("window.app.getMarkdown()") { value, _ in result = value as? String }
             try waitUntil { result != nil }

@@ -162,21 +162,12 @@
     assert(document.querySelector('#modified-dot').hidden, 'Dirty indicator not cleared');
     assert(app.getMarkdown() === 'Keep this content\n', 'Save metadata replaced contents');
   });
-  await test('Outline updates and code block headings are excluded', async () => {
-    app.load({ text: '# First\n\n## Second\n\n```md\n# Not a heading\n```\n' });
-    app.command('outline'); await tick();
-    assert($$('#outline button').map(b => b.textContent).join('|') === 'First|Second', 'Outline incorrect');
+  await test('Outline headings exclude code blocks in both modes', async () => {
+    app.load({ text: '# First\n\n## Second\n\n```md\n# Not a heading\n```\n' }); await tick();
+    assert(app.headings().map(h => h.text).join('|') === 'First|Second', 'Outline incorrect');
     app.command('source'); await tick();
-    assert($$('#outline button').length === 2, 'Source outline included code');
+    assert(app.headings().length === 2, 'Source outline included code');
     app.command('source');
-  });
-  await test('Folder filtering and safe filenames', async () => {
-    app.command('folder', { name: 'Notes', children: [{ name: 'Work', children: [{ name: 'Plan.md', path: '/notes/Plan.md' }] }, { name: '<img onerror=alert(1)>.md', path: '/notes/safe.md' }] });
-    assert($$('.file-row').length === 2, 'Folder files missing');
-    assert(!document.querySelector('#file-tree img'), 'Filename interpreted as HTML');
-    const filter = document.querySelector('#file-filter'); filter.value = 'plan'; filter.dispatchEvent(new Event('input'));
-    assert($$('.file-row').length === 1, 'Filter incorrect');
-    filter.value = ''; filter.dispatchEvent(new Event('input'));
   });
   await test('Search finds and selects document text', async () => {
     app.load({ text: '# Find\n\nA needle in a haystack. Another needle.\n' });
@@ -275,8 +266,7 @@
     assert(keyword, 'JavaScript keyword not highlighted');
     assert($$('.cm-code-string').some(node => node.textContent === '"s"') && $$('.cm-code-comment').some(node => node.textContent === '// note'), 'String or comment not highlighted');
     assert(!document.querySelector('.cm-line .cm-code-string')?.closest('.cm-line')?.textContent.startsWith('# Title'), 'Markdown text was highlighted as code');
-    app.command('outline'); await tick();
-    assert($$('#outline button').map(b => b.textContent).join('|') === 'Title "quoted"', 'Markdown inside a code block reached the outline');
+    assert(app.headings().map(h => h.text).join('|') === 'Title "quoted"', 'Markdown inside a code block reached the outline');
     app.command('source');
   });
   await test('Text zoom scales the document text only', async () => {
@@ -289,13 +279,13 @@
     assert(Math.abs(size() - base) < 0.01, 'Loading did not apply the zoom it was sent');
   });
   await test('The title bar inset pushes the layout down and a tab bar hides the toolbar name', async () => {
-    const sidebar = document.querySelector('#sidebar'), name = document.querySelector('#document-name');
-    assert(getComputedStyle(sidebar).paddingTop === '0px' && getComputedStyle(name).display !== 'none', 'Unexpected default title bar layout');
+    const main = document.querySelector('main'), name = document.querySelector('#document-name');
+    assert(getComputedStyle(main).paddingTop === '0px' && getComputedStyle(name).display !== 'none', 'Unexpected default title bar layout');
     app.command('titlebar', { inset: 68, tabBar: true });
-    assert(getComputedStyle(sidebar).paddingTop === '68px' && getComputedStyle(document.querySelector('main')).paddingTop === '68px', 'Inset not applied');
+    assert(getComputedStyle(main).paddingTop === '68px', 'Inset not applied');
     assert(getComputedStyle(name).display === 'none', 'Toolbar name shown beside a tab bar');
     app.command('titlebar', { inset: 32, tabBar: false });
-    assert(getComputedStyle(name).display !== 'none' && getComputedStyle(sidebar).paddingTop === '32px', 'Single tab did not show the name');
+    assert(getComputedStyle(name).display !== 'none' && getComputedStyle(main).paddingTop === '32px', 'Single tab did not show the name');
     app.command('titlebar', { inset: 0, tabBar: false });
   });
   await test('Typewriter control works', async () => {
