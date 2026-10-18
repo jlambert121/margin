@@ -288,6 +288,16 @@
     app.load({ name: 'Zoomed.md', text: 'x', textZoom: 1 });
     assert(Math.abs(size() - base) < 0.01, 'Loading did not apply the zoom it was sent');
   });
+  await test('The title bar inset pushes the layout down and a tab bar hides the toolbar name', async () => {
+    const sidebar = document.querySelector('#sidebar'), name = document.querySelector('#document-name');
+    assert(getComputedStyle(sidebar).paddingTop === '0px' && getComputedStyle(name).display !== 'none', 'Unexpected default title bar layout');
+    app.command('titlebar', { inset: 68, tabBar: true });
+    assert(getComputedStyle(sidebar).paddingTop === '68px' && getComputedStyle(document.querySelector('main')).paddingTop === '68px', 'Inset not applied');
+    assert(getComputedStyle(name).display === 'none', 'Toolbar name shown beside a tab bar');
+    app.command('titlebar', { inset: 32, tabBar: false });
+    assert(getComputedStyle(name).display !== 'none' && getComputedStyle(sidebar).paddingTop === '32px', 'Single tab did not show the name');
+    app.command('titlebar', { inset: 0, tabBar: false });
+  });
   await test('Typewriter control works', async () => {
     app.command('typewriter'); assert(document.body.classList.contains('typewriter'), 'Typewriter mode not applied');
     app.command('typewriter');

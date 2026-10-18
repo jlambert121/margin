@@ -389,6 +389,50 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { windowA.tabbedWindows?.count == 3 }
             try waitUntil { pollListed(editorA); return listed == 3 }
         }
+        test("Tabs restored at launch list every tab in their group") {
+            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            // Restoration decodes each document's state and groups its window as a tab without showWindow.
+            let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+            a.encodeRestorableState(with: archiver); archiver.finishEncoding()
+            for doc in [a, b] {
+                doc.recoveryStore = recoveryStore; controller.addDocument(doc); doc.makeWindowControllers()
+                let unarchiver = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
+                doc.restoreState(with: unarchiver)
+            }
+            defer { for doc in [a, b] { doc.close() } }
+            guard let editorA = a.editorController, let editorB = b.editorController, let windowA = editorA.window, let windowB = editorB.window else { throw CocoaError(.fileReadUnknown) }
+            windowA.orderFront(nil); windowA.addTabbedWindow(windowB, ordered: .above)
+            try waitUntil { windowA.tabbedWindows?.count == 2 }
+            delegate.showRestoredEditors()
+            try expect(editorA.tabDocuments.count == 2 && editorB.tabDocuments.count == 2, "Restored tabs list only themselves")
+            try waitUntil { editorA.canSynchronize && editorB.canSynchronize }
+            var listed = -1
+            try waitUntil { editorA.webView.evaluateJavaScript("document.querySelectorAll('#open-files .open-file').length") { result, _ in listed = result as? Int ?? -1 }; return listed == 2 }
+        }
+        test("The editor fills the window under the title bar and hides its name beside a tab bar") {
+            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
+            defer { for doc in controller.documents { doc.close() } }
+            guard let editorA = a.editorController, let windowA = editorA.window else { throw CocoaError(.fileReadUnknown) }
+            try expect(windowA.styleMask.contains(.fullSizeContentView) && windowA.titleVisibility == .hidden, "Editor window does not extend under a hidden title")
+            try waitUntil { editorA.canSynchronize }
+            var state = ""
+            func poll(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("[getComputedStyle(document.documentElement).getPropertyValue('--titlebar-inset').trim(), document.body.classList.contains('tab-bar')].join(' ')") { result, _ in state = result as? String ?? "" } }
+            let single = Int(editorA.titlebarPayload()["inset"] as? CGFloat ?? 0)
+            try expect(single > 0, "No title bar inset for a single tab")
+            try waitUntil { poll(editorA); return state == "\(single)px false" }
+            try expect(Int(editorA.titlebarDragView.frame.height) == single, "Drag strip does not cover the title bar")
+            let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            b.recoveryStore = recoveryStore; controller.addDocument(b); b.makeWindowControllers(); b.showWindows()
+            try waitUntil { windowA.tabbedWindows?.count == 2 }
+            guard let editorB = b.editorController else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editorB.canSynchronize }
+            let tabbed = Int(editorB.titlebarPayload()["inset"] as? CGFloat ?? 0)
+            try expect(tabbed > single, "Tab bar did not add to the inset: \(single) → \(tabbed)")
+            try waitUntil { poll(editorB); return state == "\(tabbed)px true" }
+            try waitUntil { poll(editorA); return state.hasSuffix(" true") }
+        }
         test("Editor typing makes one document undo step and the undo key reverts it") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore

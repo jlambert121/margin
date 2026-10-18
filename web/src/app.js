@@ -210,6 +210,7 @@
     else if (folder) renderFiles();
     if (Array.isArray(data.openFiles)) { openFiles = data.openFiles; renderOpenFiles(); }
     if (data.textZoom != null) setTextZoom(Number(data.textZoom));
+    if (data.titlebar) setTitlebar(data.titlebar);
     refresh();
     documentToken = data.token ?? null;
     editRevision = 0;
@@ -586,6 +587,11 @@
     $('#goto-bar').hidden = true;
     revealPosition(line.from + column - 1);
   }
+  // The native title bar, and its tab bar when shown, cover the top of the page.
+  function setTitlebar({ inset = 0, tabBar = false } = {}) {
+    document.documentElement.style.setProperty('--titlebar-inset', `${Math.max(0, Number(inset) || 0)}px`);
+    document.body.classList.toggle('tab-bar', Boolean(tabBar));
+  }
   function setTextZoom(zoom) {
     if (Number.isFinite(zoom) && zoom > 0) { $('#editor').style.setProperty('--text-zoom', String(zoom)); view.requestMeasure(); }
   }
@@ -603,6 +609,7 @@
     else if (name === 'replace') showFind(true);
     else if (name === 'goToLine') showGoToLine();
     else if (name === 'textZoom') setTextZoom(Number(value));
+    else if (name === 'titlebar') setTitlebar(value ?? {});
     else if (name === 'typewriter') setTypewriter();
     else if (name === 'exportHTML') post('exportHTML', { html: exportHTML() });
     else if (name === 'print') post('print');

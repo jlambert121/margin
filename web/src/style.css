@@ -28,6 +28,8 @@
   --code-deleted:#b0413e;
   /* Scales the document text; the editor element overrides it from View › Zoom. */
   --text-zoom:1;
+  /* Height of the native title bar and tab bar over the page, set by the app. */
+  --titlebar-inset:0px;
   font-family:-apple-system,BlinkMacSystemFont,sans-serif;
   font-size:13px
 }
@@ -92,6 +94,7 @@ button[aria-pressed=true] {
 }
 
 #sidebar {
+  padding-top:var(--titlebar-inset);
   width:244px;
   flex-shrink:0;
   background:var(--sidebar);
@@ -365,6 +368,7 @@ kbd {
 }
 
 main {
+  padding-top:var(--titlebar-inset);
   flex:1;
   display:flex;
   flex-direction:column;
@@ -418,6 +422,15 @@ main {
   font-size:7px;
   color:var(--accent);
   margin-left:-6px
+}
+
+/* The tab already shows the name. */
+body.tab-bar #document-name,body.tab-bar .toolbar-left .divider {
+  display:none
+}
+
+body.tab-bar #modified-dot {
+  margin-left:0
 }
 
 #source-button {
@@ -714,7 +727,7 @@ main {
 
 .popover {
   position:fixed;
-  top:49px;
+  top:calc(49px + var(--titlebar-inset));
   right:50px;
   z-index:30;
   background:var(--chrome);

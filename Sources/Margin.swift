@@ -40,6 +40,9 @@ final class MarkdownDocument: NSDocument {
     private var uncountedEdit = false
     private var savesWaitingForEdit: [() -> Void] = []
     private var recoveryErrorReported = false
+    // Set when AppKit restores this document's window at launch, which places
+    // the window in its tabs without calling showWindow.
+    private(set) var wasRestored = false
     var editorName: String { fileURL?.lastPathComponent ?? recoveredName ?? "Untitled.md" }
     override class var autosavesInPlace: Bool { true }
     override var fileURL: URL? { didSet { NotificationCenter.default.post(name: .openFilesChanged, object: self) } }
@@ -68,6 +71,7 @@ final class MarkdownDocument: NSDocument {
     }
     override func restoreState(with coder: NSCoder) {
         super.restoreState(with: coder)
+        wasRestored = true
         if coder.containsValue(forKey: "Margin.recoveryID"),
            let value = coder.decodeObject(of: NSString.self, forKey: "Margin.recoveryID") as String?,
            let id = UUID(uuidString: value) { recoveryID = id }
@@ -398,6 +402,20 @@ final class MessageBridge: NSObject, WKScriptMessageHandler {
 
 // Markdown files dropped on the editor open as tabs; anything else, such as
 // images, still goes to WebKit for the editor's own drop handling.
+// The editor fills the window under the title bar, and the web view does not
+// move the window, so this strip over the title bar's height does.
+final class TitlebarDragView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        guard event.clickCount == 2 else { window.performDrag(with: event); return }
+        switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+        case "Minimize": window.performMiniaturize(nil)
+        case "None": break
+        default: window.performZoom(nil)
+        }
+    }
+}
+
 final class EditorWebView: WKWebView {
     var onOpenFiles: (([URL]) -> Void)?
     // WebKit registers its own editing undo on the responder chain's undo
@@ -453,6 +471,9 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     private var tabObservation: NSKeyValueObservation?
     private weak var observedTabGroup: NSWindowTabGroup?
     private var hasBeenShown = false
+    private let editorContainer = NSView()
+    let titlebarDragView = TitlebarDragView()
+    private var titlebarObservation: NSKeyValueObservation?
     var doc: MarkdownDocument { document as! MarkdownDocument }
     private var app: AppDelegate? { (NSDocumentController.shared as? DocumentController)?.app }
 
@@ -461,13 +482,24 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         configuration.setURLSchemeHandler(assets, forURLScheme: "markdown-asset")
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         webView = EditorWebView(frame: .zero, configuration: configuration)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.minSize = NSSize(width: 700, height: 480)
         window.titlebarAppearsTransparent = true
+        // The tab shows the name, and the toolbar shows it when there is no tab bar.
+        window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
         window.identifier = NSUserInterfaceItemIdentifier("MarkdownEditor")
         window.isRestorable = true
-        window.contentView = webView
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        titlebarDragView.translatesAutoresizingMaskIntoConstraints = false
+        editorContainer.addSubview(webView); editorContainer.addSubview(titlebarDragView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: editorContainer.topAnchor), webView.bottomAnchor.constraint(equalTo: editorContainer.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), webView.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor),
+            titlebarDragView.topAnchor.constraint(equalTo: editorContainer.topAnchor),
+            titlebarDragView.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), titlebarDragView.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor)
+        ])
+        window.contentView = editorContainer
         window.center()
         window.tabbingMode = .preferred
         window.tabbingIdentifier = "MarginEditor"
@@ -475,6 +507,14 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         // Set on the controller, after init: adopting the window replaces the
         // window's own autosave name with the controller's, which defaults to empty.
         windowFrameAutosaveName = "MarginEditor"
+        let dragHeight = titlebarDragView.heightAnchor.constraint(equalToConstant: 0)
+        dragHeight.isActive = true
+        // Changes when the tab bar appears or hides and when entering or leaving full screen.
+        titlebarObservation = window.observe(\.contentLayoutRect, options: [.initial]) { [weak self] _, _ in
+            guard let self else { return }
+            dragHeight.constant = self.titlebarPayload()["inset"] as? CGFloat ?? 0
+            self.send("titlebar", self.titlebarPayload())
+        }
         webView.onOpenFiles = { [weak self] urls in
             guard let self, let window = self.window else { return }
             self.app?.open(urls, asTabsIn: window)
@@ -498,7 +538,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         _ = session.beginLoad()
         failureText = nil
         webView.isHidden = true
-        window?.contentView = webView
+        window?.contentView = editorContainer
         armLoadTimeout()
         guard let index = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "web") else {
             showEditorFailure("The editor files are missing from the application bundle.")
@@ -611,6 +651,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         var payload: [String: Any] = ["text": doc.text, "token": token, "name": doc.editorName, "path": doc.fileURL?.path ?? "", "modified": doc.isDocumentEdited]
         if let folder = app?.folderPayload() { payload["folder"] = folder }
         if let zoom = app?.settings.textZoom { payload["textZoom"] = zoom }
+        payload["titlebar"] = titlebarPayload()
         if let notice { payload["notice"] = notice }
         payload["openFiles"] = openFilesPayload()
         do {
@@ -685,6 +726,10 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     // shown gives it a group of its own and stops it joining the current tabs.
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
+        markShown()
+    }
+    // Restored windows are already in their tab group when restoration finishes.
+    func markShown() {
         hasBeenShown = true
         observeTabGroup()
         NotificationCenter.default.post(name: .openFilesChanged, object: self)
@@ -713,6 +758,14 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         if (tab.windowController?.document as? NSDocument)?.isDocumentEdited == true { tab.makeKeyAndOrderFront(nil) }
         tab.performClose(nil)
     }
+    // The height the title bar and tab bar cover at the top of the editor, and
+    // whether the tab bar is showing the document's name.
+    func titlebarPayload() -> [String: Any] {
+        guard let window else { return ["inset": CGFloat(0), "tabBar": false] }
+        let inset = max(0, window.frame.height - window.contentLayoutRect.maxY)
+        // Reading tabGroup before the window is shown would give it a group of its own.
+        return ["inset": inset, "tabBar": hasBeenShown && window.tabGroup?.isTabBarVisible == true]
+    }
     private func openFilesPayload() -> [[String: Any]] {
         tabDocuments.map { tab in
             ["id": tab.recoveryID.uuidString, "name": tab.editorName, "path": tab.fileURL?.path ?? "", "modified": tab.isDocumentEdited, "current": tab === document]
@@ -721,6 +774,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     func sendOpenFiles() {
         observeTabGroup()
         send("openFiles", openFilesPayload())
+        send("titlebar", titlebarPayload())
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated {
@@ -849,7 +903,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         finishStartupIfReady()
     }
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+    func showRestoredEditors() {
+        for case let doc as MarkdownDocument in controller.documents where doc.wasRestored { doc.editorController?.markShown() }
+    }
     @objc func applicationDidFinishRestoringWindows(_ notification: Notification) {
+        showRestoredEditors()
         restorationFinished = true
         finishStartupIfReady()
     }
