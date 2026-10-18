@@ -33,8 +33,9 @@
     }
   }
   class BulletWidget extends WidgetType {
-    eq() { return true; }
-    toDOM() { const bullet = document.createElement('span'); bullet.className = 'cm-md-bullet'; bullet.textContent = '•'; return bullet; }
+    constructor(glyph) { super(); this.glyph = glyph; }
+    eq(other) { return other.glyph === this.glyph; }
+    toDOM() { const bullet = document.createElement('span'); bullet.className = 'cm-md-bullet'; bullet.textContent = this.glyph; return bullet; }
   }
   class RuleWidget extends WidgetType {
     eq() { return true; }
@@ -65,8 +66,12 @@
     }
     ignoreEvent() { return true; }
   }
-  const bullet = new BulletWidget();
+  // Nested bullet lists cycle through these, as most renderers do.
+  const bullets = ['•', '◦', '▪'].map(glyph => new BulletWidget(glyph));
   const rule = new RuleWidget();
+  // How many lists contain a list item, counting its own.
+  const listDepth = item => { let depth = 0; for (let node = item.parent; node; node = node.parent) if (node.name === 'BulletList' || node.name === 'OrderedList') depth++; return depth; };
+  const inQuote = node => { for (let parent = node.parent; parent; parent = parent.parent) if (parent.name === 'Blockquote') return true; return false; };
 
   function decorate(state) {
     const doc = state.doc;
@@ -82,6 +87,10 @@
     const lineClass = (cls, pos) => add(Decoration.line({ class: cls }), doc.lineAt(pos).from);
     const eachLine = (from, to, fn) => { for (let pos = from; pos <= to;) { const line = doc.lineAt(pos); fn(line); pos = line.to + 1; } };
     const children = (node, name) => node.node.getChildren(name);
+    const spaceAfter = to => doc.sliceString(to, to + 1) === ' ' ? to + 1 : to;
+    // List lines indent by nesting depth instead of their source spaces, which are
+    // hidden like other syntax. Keyed by line start; quoted lists keep the quote's layout.
+    const listLines = new Map();
 
     tree.iterate({ enter(node) {
       const { name, from, to } = node;
@@ -146,19 +155,38 @@
           if (!lineTouched(from)) hideWithSpace(from, to);
           return;
         }
+        case 'ListItem': {
+          if (!inQuote(node.node)) listLines.set(doc.lineAt(from).from, { depth: listDepth(node.node), first: true });
+          return;
+        }
+        case 'Paragraph': {
+          const item = node.node.parent;
+          if (item?.name !== 'ListItem' || inQuote(item)) return;
+          const depth = listDepth(item), itemLine = doc.lineAt(item.from).number;
+          eachLine(from, to, line => {
+            if (line.number === itemLine) return;
+            listLines.set(line.from, { depth, first: false });
+            const lead = /^[ \t]+/.exec(line.text);
+            if (lead && !lineTouched(line.from)) hide(line.from, line.from + lead[0].length);
+          });
+          return;
+        }
+        // The marker takes a fixed width, standing in for the space after it, so
+        // wrapped lines can line up with the item's text.
         case 'ListMark': {
           const item = node.node.parent;
-          const task = item?.getChild('Task');
-          if (lineTouched(from)) return;
-          if (task) hideWithSpace(from, to);
-          else if (item?.parent?.name === 'BulletList') add(Decoration.replace({ widget: bullet }), from, to);
-          else mark('cm-md-list-number', from, to);
+          if (item?.name !== 'ListItem' || lineTouched(from)) return;
+          const line = doc.lineAt(from);
+          if (/^[ \t]+$/.test(doc.sliceString(line.from, from))) hide(line.from, from);
+          if (item.getChild('Task')) hide(from, spaceAfter(to));
+          else if (item.parent?.name === 'BulletList') add(Decoration.replace({ widget: bullets[(listDepth(item) - 1) % bullets.length] }), from, spaceAfter(to));
+          else { mark('cm-md-list-number', from, to); hide(to, spaceAfter(to)); }
           return;
         }
         case 'TaskMarker': {
           const checked = /x/i.test(doc.sliceString(from, to));
           if (checked) mark('cm-md-task-done', to, node.node.parent?.to ?? to);
-          if (!touches(from, to)) add(Decoration.replace({ widget: new CheckboxWidget(checked) }), from, to);
+          if (!touches(from, to)) add(Decoration.replace({ widget: new CheckboxWidget(checked) }), from, spaceAfter(to));
           return;
         }
         case 'HorizontalRule': {
@@ -199,6 +227,9 @@
         }
       }
     } });
+    for (const [pos, { depth, first }] of listLines) {
+      add(Decoration.line({ class: first ? 'cm-md-list-line' : 'cm-md-list-line cm-md-list-continuation', attributes: { style: `--list-depth:${depth - 1}` } }), pos);
+    }
     return Decoration.set(decorations, true);
   }
 

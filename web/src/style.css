@@ -308,12 +308,29 @@ body.tab-bar #modified-dot {
   color:var(--muted)
 }
 
+/* Lists indent by nesting depth, and a wrapped item continues under its text
+   rather than under its marker. */
+#editor .cm-md-list-line {
+  --list-marker:1.3em;
+  padding-left:calc(var(--list-depth) * 1.5em + var(--list-marker));
+  text-indent:calc(-1 * var(--list-marker))
+}
+
+#editor .cm-md-list-continuation {
+  text-indent:0
+}
+
 .cm-md-bullet,.cm-md-list-number {
-  color:var(--muted)
+  color:var(--muted);
+  display:inline-block;
+  min-width:var(--list-marker, 1.3em);
+  text-indent:0
 }
 
 .cm-md-task {
-  margin:0 .35em 0 0;
+  width:.85em;
+  height:.85em;
+  margin:0 .45em 0 0;
   vertical-align:-1px;
   accent-color:var(--accent);
   cursor:pointer

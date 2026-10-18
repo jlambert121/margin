@@ -42,6 +42,26 @@
     assert(lineText('cm-md-h2') === 'Header', 'New heading did not render after leaving it');
     assert(app.getMarkdown() === 'Intro\n## Header', 'Typing changed the Markdown');
   });
+  await test('Nested lists indent by depth, vary their bullets, and wrap under their text', async () => {
+    const long = 'A long item that keeps going so that it wraps onto another line in the editor, '.repeat(4);
+    app.load({ text: `- One\n  - Two\n    - Three\n- ${long}\n\n1. First\n   continued line\n`, name: 'Lists.md' }); blur(); await tick();
+    const lines = $$('.cm-md-list-line');
+    assert(lines.map(line => line.textContent).slice(0, 3).join('|') === '•One|◦Two|▪Three', 'Bullets or hidden indentation wrong: ' + lines.map(line => line.textContent).join('|'));
+    const left = line => parseFloat(getComputedStyle(line).paddingLeft);
+    const em = parseFloat(getComputedStyle(lines[0]).fontSize);
+    assert(Math.abs(left(lines[1]) - left(lines[0]) - 1.5 * em) < 1 && Math.abs(left(lines[2]) - left(lines[1]) - 1.5 * em) < 1, `Depth indent wrong: ${lines.slice(0, 3).map(left)}`);
+    const continued = $$('.cm-md-list-continuation');
+    assert(continued.length === 1 && continued[0].textContent === 'continued line', 'Continuation line not indented under its item');
+    const textStart = view.state.doc.toString().indexOf('A long');
+    const first = view.coordsAtPos(textStart);
+    let wrapped = textStart;
+    while (wrapped < textStart + long.length && view.coordsAtPos(wrapped).top <= first.top + 1) wrapped++;
+    assert(wrapped < textStart + long.length, 'Long item did not wrap');
+    assert(Math.abs(view.coordsAtPos(wrapped).left - first.left) < 2, `Wrapped line starts at ${view.coordsAtPos(wrapped).left}, its text at ${first.left}`);
+    cursorAt(view.state.doc.line(2).from + 5); await tick();
+    assert(lineText('cm-md-list-line') !== undefined && $$('.cm-md-list-line')[1].textContent === '  - Two', 'Editing a nested item did not show its source');
+    blur();
+  });
   await test('Task checkboxes edit the task text', async () => {
     app.load({ text: '- [ ] One\n- [x] Two\n', name: 'Tasks.md' }); blur(); await tick();
     $$('.cm-md-task')[0].click(); await tick();
