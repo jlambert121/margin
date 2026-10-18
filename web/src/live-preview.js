@@ -18,6 +18,32 @@
   });
   const trackFocus = EditorView.focusChangeEffect.of((_, focusing) => setFocused.of(focusing));
 
+  // While the mouse button is down, syntax stays shown or hidden as it was when the press
+  // began. Revealing the clicked line's markers mid-click moves its text, and CodeMirror
+  // reads the pointer again on any movement, so a click would select instead of placing
+  // the cursor. The layout catches up once the button is released.
+  const setPressed = StateEffect.define();
+  const pressed = StateField.define({
+    create: () => null,
+    update(value, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(setPressed)) value = effect.value;
+        else if (effect.is(setFocused) && !effect.value) value = null;
+      }
+      return value;
+    },
+  });
+  const holdLayoutWhilePressed = EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (event.button !== 0) return false;
+      view.dispatch({ effects: setPressed.of({ focused: view.state.field(focused), ranges: view.state.selection.ranges }) });
+      // After CodeMirror's own mouseup handling, which can still read the pointer.
+      const release = () => setTimeout(() => { if (view.state.field(pressed)) view.dispatch({ effects: setPressed.of(null) }); });
+      view.contentDOM.ownerDocument.addEventListener('mouseup', release, { once: true });
+      return false;
+    },
+  });
+
   const safeImageSource = src => /^(https?:|data:image\/|markdown-asset:)/i.test(src) || !/^[a-z][a-z0-9+.-]*:/i.test(src);
 
   class ImageWidget extends WidgetType {
@@ -76,7 +102,8 @@
   function decorate(state) {
     const doc = state.doc;
     const tree = ensureSyntaxTree(state, doc.length, 200) ?? syntaxTree(state);
-    const ranges = state.field(focused) ? state.selection.ranges : [];
+    const held = state.field(pressed);
+    const ranges = (held ? held.focused : state.field(focused)) ? (held ? held.ranges : state.selection.ranges) : [];
     const touches = (from, to) => ranges.some(range => range.from <= to && range.to >= from);
     const lineTouched = pos => { const line = doc.lineAt(pos); return touches(line.from, line.to); };
     const decorations = [];
@@ -255,5 +282,5 @@
   });
 
   // setFocused is exported so tests without a focusable window can simulate focus.
-  window.MarginLivePreview = { extension: [focused, trackFocus, MarginTables.sourceTables, decorations], setFocused };
+  window.MarginLivePreview = { extension: [focused, trackFocus, pressed, holdLayoutWhilePressed, MarginTables.sourceTables, decorations], setFocused };
 })();

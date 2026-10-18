@@ -105,6 +105,48 @@
     app.command('pastePlain', '<b>not html</b> **as is**');
     assert(view.state.doc.toString() === '<b>not html</b> **as is**', 'Paste and Match Style changed the text');
   });
+  await test('A click with a little pointer movement places the cursor even where markers appear', async () => {
+    const press = async (target, moveTo = null) => {
+      const point = pos => { const { left, top, bottom } = view.coordsAtPos(pos); return { clientX: left + 1, clientY: (top + bottom) / 2 }; };
+      const init = { bubbles: true, cancelable: true, button: 0, buttons: 1, detail: 1, ...point(target) };
+      document.elementFromPoint(init.clientX, init.clientY).dispatchEvent(new MouseEvent('mousedown', init));
+      await tick();
+      const end = moveTo === null ? { clientX: init.clientX + 1, clientY: init.clientY } : point(moveTo);
+      document.dispatchEvent(new MouseEvent('mousemove', { ...init, ...end }));
+      await tick();
+      document.dispatchEvent(new MouseEvent('mouseup', { ...init, ...end, buttons: 0 }));
+      await tick();
+    };
+    const cases = [
+      ['heading', 'Intro text here\n\n## A heading line here\n\nMore text\n', 0, 3, 6],
+      ['bold', 'Intro text here\n\nSome **bold words** in it\n', 0, 3, 12],
+      ['nested list', 'Intro\n\n- one\n  - nested item text\n', 0, 4, 8],
+      ['below the code block holding the cursor', '```js\nlet a = 1\n```\n\nPlain line\nPlain line\nPlain line\nTarget words here\n', 7, 8, 7],
+    ];
+    for (const [label, text, cursor, line, offset] of cases) {
+      app.load({ text, name: 'Click.md' }); await tick();
+      cursorAt(cursor); await tick();
+      const target = view.state.doc.line(line).from + offset;
+      await press(target);
+      const { from, to } = view.state.selection.main;
+      assert(from === target && to === target, `Clicking a ${label} selected ${JSON.stringify(view.state.sliceDoc(from, to))}`);
+    }
+    // A click that focuses the editor reveals the old cursor line's markers too.
+    app.load({ text: '```js\nlet a = 1\n```\n\nPlain line\nTarget words here\n', name: 'Click.md' }); await tick();
+    view.dispatch({ selection: { anchor: 7 } }); blur(); await tick();
+    const target = view.state.doc.line(6).from + 7;
+    await press(target);
+    assert(view.state.selection.main.empty && view.state.selection.main.head === target, 'A click that focused the editor selected text');
+    // Dragging still selects, and the clicked line's markers show once the button is up.
+    app.load({ text: 'Intro\n\n## Heading words here\n', name: 'Drag.md' }); await tick();
+    cursorAt(0); await tick();
+    const start = view.state.doc.line(3).from + 3;
+    await press(start, start + 7);
+    assert(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to) === 'Heading', 'Drag did not select: ' + JSON.stringify(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)));
+    await tick();
+    assert(lineText('cm-md-h2') === '## Heading words here', 'Markers did not appear after the click: ' + lineText('cm-md-h2'));
+    blur();
+  });
   await test('Task checkboxes edit the task text', async () => {
     app.load({ text: '- [ ] One\n- [x] Two\n', name: 'Tasks.md' }); blur(); await tick();
     $$('.cm-md-task')[0].click(); await tick();

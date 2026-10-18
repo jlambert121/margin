@@ -628,6 +628,37 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             newEditor.sidebar.finishRename(path: created.path, name: "Fresh note")
             try waitUntil { FileManager.default.fileExists(atPath: folder.appendingPathComponent("Fresh note.md").path) && newEditor.doc.fileURL?.lastPathComponent == "Fresh note.md" }
         }
+        test("Right-clicking the document adds Insert and formatting commands after Paste") {
+            let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            doc.recoveryStore = recoveryStore
+            controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+            defer { doc.close() }
+            guard let editor = doc.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editor.canSynchronize }
+            func webKitMenu() -> NSMenu {
+                let menu = NSMenu()
+                for id in ["WKMenuItemIdentifierCut", "WKMenuItemIdentifierCopy", "WKMenuItemIdentifierPaste", "Services"] {
+                    let item = NSMenuItem(title: id, action: nil, keyEquivalent: ""); item.identifier = NSUserInterfaceItemIdentifier(id); menu.addItem(item)
+                }
+                return menu
+            }
+            let event = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            let field = webKitMenu()
+            editor.webView.willOpenMenu(field, with: event)
+            try expect(field.items.count == 4, "A right-click outside the document got document commands")
+            let menu = webKitMenu()
+            editor.webView.documentMenuRequested = true
+            editor.webView.willOpenMenu(menu, with: event)
+            let titles = menu.items.map { $0.isSeparatorItem ? "-" : $0.title }
+            try expect(Array(titles.prefix(4)) == ["WKMenuItemIdentifierCut", "WKMenuItemIdentifierCopy", "WKMenuItemIdentifierPaste", "-"] && titles.contains("Insert Table") && titles.last == "Services", "Commands not placed after Paste: \(titles)")
+            try expect(menu.items.first { $0.title == "Paragraph" }?.submenu?.items.contains { $0.title == "Heading 2" } == true, "Paragraph submenu missing")
+            editor.webView.willOpenMenu(webKitMenu(), with: event)
+            try expect(!editor.webView.documentMenuRequested, "The request carried over to the next menu")
+            guard let table = menu.items.first(where: { $0.title == "Insert Table" }) else { throw CocoaError(.fileReadUnknown) }
+            editor.formatFromMenu(table)
+            var text = ""
+            try waitUntil { editor.webView.evaluateJavaScript("app.getMarkdown()") { result, _ in text = result as? String ?? "" }; return text.contains("| Column | Column | Column |") }
+        }
         test("Edits announce a change to the open files only when the document becomes unsaved") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore

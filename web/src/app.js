@@ -7,7 +7,7 @@
     if (native) window.webkit.messageHandlers.native.postMessage({ action, ...payload });
     else if (action === 'changed') sessionStorage.setItem('margin-draft', payload.text);
     else if (action === 'openExternal') window.open(payload.url, '_blank', 'noopener');
-    else if (['undo', 'redo', 'outline'].includes(action)) return;
+    else if (['undo', 'redo', 'outline', 'contextMenu'].includes(action)) return;
     else toast('Open the macOS app to use native file operations.');
   };
   const welcome = '# A little room to think.\n\nWelcome to **Margin**. A quiet place for your notes, ideas, and everything in between.\n\n## Just start writing\n\nYour words take shape as you type. Use Markdown shortcuts for headings, **bold**, *italics*, and lists — the formatting appears right here on the page.\n\n> The secret of getting ahead is getting started.\n\n## Make yourself at home\n\n- Open a Markdown file with **⌘O**\n- Browse a folder with **⇧⌘O**\n- Switch to source mode with **⌘/**\n- Save your work with **⌘S**\n\n### A few things to try\n\n- [x] Find a little space to write\n- [ ] Put an idea into words\n- [ ] Make something worth keeping\n\n## For the details\n\nCode, tables, links, and images all have a place here.\n\n```swift\nlet thought = "Something worth writing down."\nprint(thought)\n```\n\n| Shortcut | A small superpower |\n| --- | --- |\n| ⌘B | A little emphasis |\n| ⌘F | Find the right words |\n\n---\n\nTake your time. The page is yours.\n';
@@ -166,6 +166,21 @@
           event.preventDefault();
           insertImages(files, view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.from);
           return true;
+        },
+        // Right-click selects the word under the pointer, which spelling suggestions and Look Up
+        // use. On a blank line or between words that is only spacing, so the cursor goes there
+        // instead, and text already selected stays selected for Cut and Copy.
+        contextmenu(event) {
+          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+          if (pos !== null) {
+            const line = view.state.doc.lineAt(pos);
+            const around = line.text.slice(Math.max(0, pos - line.from - 1), pos - line.from + 1);
+            const inSelection = view.state.selection.ranges.some(range => range.from <= pos && range.to >= pos && /\S/.test(view.state.sliceDoc(range.from, range.to)));
+            if (!inSelection && !/\S/.test(around)) view.dispatch({ selection: { anchor: pos } });
+          }
+          // The app adds the document's commands to the menu that follows.
+          post('contextMenu');
+          return false;
         },
         // Command-click follows a link; a plain click places the cursor to edit it.
         mousedown(event) {

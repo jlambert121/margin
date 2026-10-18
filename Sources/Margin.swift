@@ -421,6 +421,25 @@ final class TitlebarDragView: NSView {
 // images, still goes to WebKit for the editor's own drop handling.
 final class EditorWebView: WKWebView {
     var onOpenFiles: (([URL]) -> Void)?
+    // The document's commands, added to WebKit's menu when the page reports that the
+    // right-click was in the document rather than in a field such as Find.
+    var documentMenuItems: () -> [NSMenuItem] = { [] }
+    var documentMenuRequested = false
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        guard documentMenuRequested else { return }
+        documentMenuRequested = false
+        let paste = menu.items.firstIndex { $0.identifier?.rawValue == "WKMenuItemIdentifierPaste" }
+        var index = paste.map { $0 + 1 } ?? 0
+        let items = documentMenuItems()
+        if paste != nil { menu.insertItem(.separator(), at: index); index += 1 }
+        for item in items { menu.insertItem(item, at: index); index += 1 }
+        if paste == nil, index < menu.items.count { menu.insertItem(.separator(), at: index) }
+    }
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        documentMenuRequested = false
+    }
     // WebKit registers its own editing undo on the responder chain's undo
     // manager, which is otherwise the document's. The document's undo works
     // on whole Markdown snapshots, so WebKit's steps must stay out of it.
@@ -557,6 +576,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             guard let self, let window = self.window else { return }
             self.app?.open(urls, asTabsIn: window)
         }
+        webView.documentMenuItems = { [weak self] in self?.documentMenuItems() ?? [] }
         connectSidebar()
         // NSDocument.addWindowController must attach us. Setting document here
         // makes AppKit treat that later call as redundant, so the document's
@@ -757,6 +777,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         case "print": printDocument(nil)
         case "exportHTML": if let html = body["html"] as? String { exportHTML(html) }
         case "toggleSidebar": toggleSidebar()
+        case "contextMenu": webView.documentMenuRequested = true
         case "outline":
             let headings = (body["headings"] as? [[String: Any]] ?? []).compactMap { item -> HeadingEntry? in
                 guard let level = item["level"] as? Int, let text = item["text"] as? String, let pos = item["pos"] as? Int else { return nil }
@@ -895,6 +916,30 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     // can sit inset within it.
     var sidebarWidth: CGFloat { splitController.splitView.arrangedSubviews.first?.frame.width ?? 0 }
     func toggleSidebar() { sidebar.state.collapsed.toggle() }
+    // Insert items first, then the Paragraph and Format menus' commands.
+    func documentMenuItems() -> [NSMenuItem] {
+        func format(_ title: String, _ kind: String) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: #selector(formatFromMenu(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = kind
+            return item
+        }
+        func submenu(_ title: String, _ items: [NSMenuItem?]) -> NSMenuItem {
+            let menu = NSMenu(title: title)
+            for item in items { menu.addItem(item ?? .separator()) }
+            let parent = NSMenuItem(title: title, action: nil, keyEquivalent: ""); parent.submenu = menu
+            return parent
+        }
+        let headings = (1...6).map { format("Heading \($0)", "h\($0)") }
+        return [
+            format("Insert Table", "table"), format("Insert Link…", "link"), format("Insert Image…", "image"), format("Insert Code Block", "codeBlock"),
+            submenu("Paragraph", [format("Body", "paragraph")] + headings + [nil, format("Bullet List", "bulletList"), format("Numbered List", "orderedList"), format("Task List", "taskList"), format("Quote", "blockquote")]),
+            submenu("Format", [format("Bold", "bold"), format("Italic", "italic"), format("Strikethrough", "strike"), format("Inline Code", "code")])
+        ]
+    }
+    @objc func formatFromMenu(_ sender: NSMenuItem) {
+        guard let kind = sender.representedObject as? String else { return }
+        send("format", kind)
+    }
     func showOutline() { sidebar.state.collapsed = false; sidebar.state.mode = .outline }
     // Workspace clicks may name only Markdown files inside the open folder.
     func openWorkspaceFile(_ path: String) {

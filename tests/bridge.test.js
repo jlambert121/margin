@@ -44,6 +44,26 @@
     toggle.click();
     assert(messages.at(-1).action === 'toggleSidebar', 'Toolbar toggle did not reach native');
   });
+  await test('Right-click places the cursor on spacing, keeps words and selections, and tells native', () => {
+    const view = app.view;
+    app.load({ text: 'First line\n\nThird words here\n', token: 'menu-load' });
+    const rightClick = pos => {
+      const { left, top, bottom } = view.coordsAtPos(pos);
+      view.contentDOM.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: left + 1, clientY: (top + bottom) / 2 }));
+    };
+    const blank = view.state.doc.line(2).from;
+    // WebKit selects the line break under the pointer before the menu event.
+    view.dispatch({ selection: { anchor: blank, head: blank + 1 } });
+    const count = messages.length;
+    rightClick(blank);
+    const { from, to } = view.state.selection.main;
+    assert(from === blank && to === blank, `Right-click on a blank line left ${from}–${to} selected`);
+    assert(messages.slice(count).some(message => message.action === 'contextMenu'), 'The right-click was not reported to native');
+    const word = view.state.doc.line(3).from + 7;
+    view.dispatch({ selection: { anchor: word - 1, head: word + 4 } });
+    rightClick(word + 2);
+    assert(view.state.selection.main.from === word - 1 && view.state.selection.main.to === word + 4, 'Right-click inside a selection changed it');
+  });
   await test('Undo keys in the document go to native undo instead of the editor histories', () => {
     app.load({ text: '# Keep me\n', token: 'undo-load' });
     const key = (target, init) => {
