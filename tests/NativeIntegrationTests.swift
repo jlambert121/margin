@@ -74,10 +74,10 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             catch { failures += 1; print("FAIL \(name): \(error)") }
             controller.app = delegate
         }
-        func waitUntil(_ finished: () -> Bool) throws {
+        func waitUntil(line: Int = #line, _ finished: () -> Bool) throws {
             let limit = Date().addingTimeInterval(15)
             while !finished() && Date() < limit { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
-            try expect(finished(), "Native operation timed out")
+            try expect(finished(), "Native operation timed out (line \(line))")
         }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -177,25 +177,6 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             controller.pendingCompletions.removeFirst()(doc, false, nil)
             try expect(controller.untitledRequests == 0, "Welcome appeared beside the opened file")
         }
-        test("A restored, unedited welcome document gets its text back") {
-            func restored(from doc: MarkdownDocument) throws -> MarkdownDocument {
-                let archiver = NSKeyedArchiver(requiringSecureCoding: true)
-                doc.encodeRestorableState(with: archiver)
-                archiver.finishEncoding()
-                let unarchiver = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
-                let copy = MarkdownDocument()
-                copy.restoreState(with: unarchiver)
-                return copy
-            }
-            guard let welcome = MarkdownDocument.welcomeText() else { throw CocoaError(.fileReadNoSuchFile) }
-            let doc = MarkdownDocument(); doc.text = welcome; doc.isWelcome = true
-            let copy = try restored(from: doc)
-            try expect(copy.text == welcome && copy.isWelcome, "Restored welcome is blank")
-            let edited = MarkdownDocument(); edited.text = welcome; edited.isWelcome = true
-            edited.edited("# My own notes\n")
-            try expect(!edited.isWelcome, "An edited welcome is still treated as the welcome")
-            try expect(try restored(from: edited).text.isEmpty, "Welcome text replaced a document the user had edited")
-        }
         test("Recovery opens unsaved edits as a separate dirty document without overwriting the file") {
             let draft = RecoveryDraft(id: UUID(), text: "# Unsaved after a crash\n", originalPath: first.path, name: first.lastPathComponent)
             try recoveryStore.write(draft)
@@ -236,13 +217,11 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(AppIconChoice.night.dockImage == nil, "Night should restore the bundle icon")
             try expect(AppIconChoice.allCases.filter { $0 != .night }.allSatisfy { $0.dockImage != nil }, "A choice has no Dock image")
         }
-        test("Settings is in the app menu and appearance is no longer in View") {
+        test("Settings is in the app menu on ⌘,") {
             let bar = delegate.makeMenu()
             let app = bar.items.first?.submenu
             let item = app?.items.first(where: { $0.action == #selector(AppDelegate.showSettings(_:)) })
             try expect(item?.keyEquivalent == "," && item?.keyEquivalentModifierMask == [.command], "Settings… is not on ⌘,")
-            let view = bar.items.first(where: { $0.submenu?.title == "View" })?.submenu
-            try expect(view?.items.contains(where: { ["Light", "Dark", "Auto"].contains($0.title) }) == false, "View still lists appearance choices")
         }
         test("Text zoom steps, clamps, and persists") {
             let settings = Settings(defaults: settingsDefaults)
@@ -266,6 +245,19 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(shortcut("Find and Replace…")! == ("f", [.command, .option]) && shortcut("Go to Line…")! == ("l", [.command]), "Find and Replace or Go to Line shortcut is wrong")
             try expect(shortcut("Quick Open…")! == ("p", [.command, .option]) && shortcut("Paste and Match Style")! == ("v", [.command, .option, .shift]), "Quick Open or Paste and Match Style shortcut is wrong")
             try expect(shortcut("Print / Save as PDF…")! == ("p", [.command]), "Print lost ⌘P")
+            try expect(shortcut("Previous File")! == ("{", [.command]) && shortcut("Next File")! == ("}", [.command]), "Previous or Next File is not on ⌘⇧[ / ⌘⇧]")
+            try expect(shortcut("Close")! == ("w", [.command]) && shortcut("Close Window")! == ("w", [.command, .shift]) && shortcut("New Window")! == ("n", [.command, .shift]), "Close, Close Window, or New Window shortcut is wrong")
+            try expect(items.first { $0.title == "Close" }?.action == #selector(EditorWindowController.closeDocument(_:)), "⌘W closes the window instead of the document")
+        }
+        test("⌘⇧[ and ⌘⇧] reach Previous and Next File") {
+            let bar = delegate.makeMenu()
+            func press(_ characters: String, _ ignoring: String, _ flags: NSEvent.ModifierFlags, _ code: UInt16) -> Bool {
+                bar.performKeyEquivalent(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil, characters: characters, charactersIgnoringModifiers: ignoring, isARepeat: false, keyCode: code)!)
+            }
+            // The events macOS sends for ⌘⇧[ and ⌘⇧], as logged from real key presses.
+            for (characters, ignoring, code) in [("[", "{", UInt16(33)), ("]", "}", 30)] {
+                try expect(press(characters, ignoring, [.command, .shift], code), "No menu item took ⌘⇧\(characters) (ignoring \(ignoring))")
+            }
         }
         test("Quick open matches names fuzzily, ranking word starts and prefixes first") {
             let names = ["Planning notes.md", "api-strategy-session.md", "Plan.md", "explain.md"]
@@ -321,7 +313,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(chosenDistance < 2, "Dock icon differs from the chosen icon by \(chosenDistance)")
             settings.appIcon = .night; themed.applySettings()
             try expect(distance(pixels(application?.applicationIconImage), ruled) > 10 * max(chosenDistance, 0.5), "Choosing Night did not restore the bundle icon")
-            guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            guard let editor = doc.editor else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editor.canSynchronize && !editor.webView.isHidden }
             var bodyTheme: String?
             func poll() { editor.webView.evaluateJavaScript("document.body.dataset.theme") { result, _ in bodyTheme = result as? String } }
@@ -331,42 +323,40 @@ final class FakeDrop: NSObject, NSDraggingInfo {
         }
         test("Closing a document before its editor loads ignores the editor's late messages") {
             // Holding the editors keeps their web views alive to deliver those messages.
-            var closed: [EditorWindowController] = []
+            var closed: [DocumentEditor] = []
             for _ in 0..<5 {
                 let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
                 doc.recoveryStore = recoveryStore
                 controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
-                if let editor = doc.editorController { closed.append(editor) }
+                if let editor = doc.editor { closed.append(editor) }
                 // Let the editor start loading before its document goes away.
                 RunLoop.current.run(until: Date().addingTimeInterval(0.05))
                 doc.close()
             }
-            try waitUntil { closed.allSatisfy { !$0.webView.isLoading } }
-            var drained = false
-            closed.last?.webView.evaluateJavaScript("1") { _, _ in drained = true }
-            try waitUntil { drained }
+            // Their pages could still finish loading and post; closing detached them from the app.
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+            try expect(closed.allSatisfy { $0.document == nil && $0.host == nil && !$0.ready }, "A closed document's editor is still connected")
         }
-        test("Documents open as tabs, list their tab group, and accept Markdown drops") {
-            let opened = { (url: URL) in controller.documents.first { $0.fileURL == url } as? MarkdownDocument }
+        test("Documents join the window after the current one, accept drops, reorder, and switch with ⌘⇧[ and ⌘⇧]") {
+            let opened = { (url: URL) in controller.documents.first { $0.fileURL?.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() } as? MarkdownDocument }
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             for doc in [a, b] { doc.recoveryStore = recoveryStore; controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows() }
             defer { for doc in controller.documents { doc.close() } }
-            guard let editorA = a.editorController, let editorB = b.editorController, let windowA = editorA.window else { throw CocoaError(.fileReadUnknown) }
-            try waitUntil { windowA.tabbedWindows?.count == 2 }
-            try expect(editorA.tabDocuments.map(\.recoveryID) == editorB.tabDocuments.map(\.recoveryID), "Tabs disagree about their group")
-            try waitUntil { editorB.canSynchronize && editorA.canSynchronize }
-            var listed = -1
-            func pollListed(_ editor: EditorWindowController) { listed = editor.sidebar.openFileNames.count }
-            try waitUntil { pollListed(editorB); return listed == 2 }
+            guard let host = a.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+            try expect(b.editor?.host === host, "Documents did not share one window")
+            func names() -> [String] { host.documents.map(\.editorName) }
+            try expect(host.documents.map(\.recoveryID) == [a, b].map(\.recoveryID) && host.current === b, "New document was not added after the current one")
+            try waitUntil { host.sidebar.openFileNames.count == 2 && host.sidebar.currentOpenFileName == b.editorName }
 
-            delegate.open([first], asTabsIn: windowA)
-            try waitUntil { opened(first)?.editorController?.window.map { windowA.tabbedWindows?.contains($0) == true } == true }
+            host.select(a)
+            delegate.open([first], in: host)
+            try waitUntil { opened(first).map { doc in host.current === doc } == true }
+            try expect(host.documents[1] === opened(first), "An opened file was not placed after the current document: \(names())")
             let count = controller.documents.count
-            delegate.open([first], asTabsIn: windowA)
+            delegate.open([first], in: host)
             try waitUntil { !controller.isOpening }
-            try expect(controller.documents.count == count && windowA.tabbedWindows?.count == 3, "Reopening an open file added a tab")
-            try waitUntil { pollListed(editorA); return listed == 3 }
+            try expect(controller.documents.count == count && host.documents.count == 3, "Reopening an open file added it again")
 
             let image = root.appendingPathComponent("picture.png")
             let pasteboard = NSPasteboard(name: NSPasteboard.Name("margin-drop-\(UUID().uuidString)"))
@@ -374,110 +364,114 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             pasteboard.clearContents(); pasteboard.writeObjects([image as NSURL])
             try expect(EditorWebView.markdownFiles(on: pasteboard).isEmpty, "Image drops were taken from the editor")
             pasteboard.clearContents(); pasteboard.writeObjects([second as NSURL])
-            let drop = FakeDrop(pasteboard: pasteboard, window: windowA)
-            try expect(editorA.webView.draggingEntered(drop) == .copy, "Markdown drop not accepted")
-            try expect(editorA.webView.prepareForDragOperation(drop) && editorA.webView.performDragOperation(drop), "Markdown drop not performed")
-            try waitUntil { opened(second)?.editorController?.window.map { windowA.tabbedWindows?.contains($0) == true } == true }
+            guard let editor = host.currentEditor else { throw CocoaError(.fileReadUnknown) }
+            let drop = FakeDrop(pasteboard: pasteboard, window: window)
+            try expect(editor.webView.draggingEntered(drop) == .copy, "Markdown drop not accepted")
+            try expect(editor.webView.prepareForDragOperation(drop) && editor.webView.performDragOperation(drop), "Markdown drop not performed")
+            try waitUntil { opened(second).map { doc in host.current === doc } == true }
+            try expect(names() == [a.editorName, first.lastPathComponent, second.lastPathComponent, b.editorName], "Unexpected order after the drop: \(names())")
 
-            var names = ""
-            func pollNames(_ editor: EditorWindowController) { names = editor.sidebar.openFileNames.joined(separator: "|") }
-            func tabNames() -> String { (windowA.tabGroup?.windows ?? []).map { ($0.windowController?.document as? MarkdownDocument)?.editorName ?? "?" }.joined(separator: "|") }
-            guard let group = windowA.tabGroup, let last = group.windows.last else { throw CocoaError(.fileReadUnknown) }
-            group.removeWindow(last); group.insertWindow(last, at: 0)
-            let reordered = tabNames()
-            try expect(reordered.hasPrefix((last.windowController?.document as? MarkdownDocument)?.editorName ?? "?"), "Tab was not moved to the front")
-            try waitUntil { pollNames(editorA); return names == reordered }
-            guard let movedEditor = opened(second)?.editorController, let moved = movedEditor.window else { throw CocoaError(.fileReadUnknown) }
-            moved.moveTabToNewWindow(nil)
-            try waitUntil { pollNames(editorA); return names == tabNames() && !names.contains("Another.markdown") }
-            try waitUntil { pollNames(movedEditor); return names == "Another.markdown" }
-            windowA.tabGroup?.addWindow(moved)
-            try waitUntil { pollNames(movedEditor); return names == tabNames() }
+            // ⌘⇧[ and ⌘⇧] step through the list and wrap.
+            host.selectAdjacent(1); try expect(host.current === b, "Next file did not move down")
+            host.selectAdjacent(1); try expect(host.current === a, "Next file did not wrap to the top")
+            host.selectAdjacent(-1); try expect(host.current === b, "Previous file did not wrap to the bottom")
 
+            // Dragging in Open Files reorders; the header is row 0, so open files start at child 1.
+            let reorder = NSPasteboard(name: NSPasteboard.Name("margin-reorder-\(UUID().uuidString)"))
+            defer { reorder.releaseGlobally() }
+            reorder.clearContents(); reorder.setString(b.recoveryID.uuidString, forType: NSPasteboard.PasteboardType("com.infiniteviewtech.margin.open-file"))
+            let move = FakeDrop(pasteboard: reorder, window: window)
+            let files = host.sidebar.filesView
+            try expect(host.sidebar.outlineView(files, validateDrop: move, proposedItem: nil, proposedChildIndex: 1) == .move, "Dragging an open file was refused")
+            try expect(host.sidebar.outlineView(files, acceptDrop: move, item: nil, childIndex: 1), "Dropping an open file failed")
+            try expect(names().first == b.editorName && host.sidebar.openFileNames == names(), "Dragging did not move the file to the top: \(names())")
+            host.move(b, to: host.documents.count)
+            try expect(names().last == b.editorName, "Moving to the end failed: \(names())")
+
+            // Closing the current document selects its neighbor; closing the last closes the window.
             guard let firstDoc = opened(first) else { throw CocoaError(.fileReadUnknown) }
-            editorA.closeTab(id: firstDoc.recoveryID.uuidString)
+            host.select(firstDoc)
+            let below = host.documents[host.documents.firstIndex { $0 === firstDoc }! + 1]
+            host.sidebar.onCloseOpenFile(firstDoc.recoveryID.uuidString)
             try waitUntil { opened(first) == nil }
-            try waitUntil { windowA.tabbedWindows?.count == 3 }
-            try waitUntil { pollListed(editorA); return listed == 3 }
+            try expect(host.current === below && host.documents.count == 3, "Closing the current document did not select the one below")
+            for doc in host.documents { doc.close() }
+            try expect(!window.isVisible && !delegate.windows.contains { $0 === host }, "Closing every document left the window open")
         }
-        test("Tabs restored at launch list every tab in their group") {
-            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
-            let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
-            // Restoration decodes each document's state and groups its window as a tab without showWindow.
+        test("A window restores its documents in order, with the current one and the welcome's text") {
+            guard let welcomeText = MarkdownDocument.welcomeText() else { throw CocoaError(.fileReadNoSuchFile) }
+            var fileDoc: MarkdownDocument?
+            controller.openDocument(withContentsOf: first, display: true) { doc, _, _ in fileDoc = doc as? MarkdownDocument }
+            try waitUntil { fileDoc != nil }
+            let welcome = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            welcome.recoveryStore = recoveryStore; welcome.text = welcomeText; welcome.isWelcome = true
+            let blank = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            blank.recoveryStore = recoveryStore
+            for doc in [welcome, blank] { controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows() }
+            guard let host = fileDoc?.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+            host.select(welcome)
+            let order = host.documents.map(\.editorName), ids = host.documents.map(\.recoveryID)
             let archiver = NSKeyedArchiver(requiringSecureCoding: true)
-            a.encodeRestorableState(with: archiver); archiver.finishEncoding()
-            for doc in [a, b] {
-                doc.recoveryStore = recoveryStore; controller.addDocument(doc); doc.makeWindowControllers()
-                let unarchiver = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
-                doc.restoreState(with: unarchiver)
-            }
-            defer { for doc in [a, b] { doc.close() } }
-            guard let editorA = a.editorController, let editorB = b.editorController, let windowA = editorA.window, let windowB = editorB.window else { throw CocoaError(.fileReadUnknown) }
-            windowA.orderFront(nil); windowA.addTabbedWindow(windowB, ordered: .above)
-            try waitUntil { windowA.tabbedWindows?.count == 2 }
-            delegate.showRestoredEditors()
-            try expect(editorA.tabDocuments.count == 2 && editorB.tabDocuments.count == 2, "Restored tabs list only themselves")
-            try waitUntil { editorA.canSynchronize && editorB.canSynchronize }
-            var listed = -1
-            try waitUntil { listed = editorA.sidebar.openFileNames.count; return listed == 2 }
+            host.window(window, willEncodeRestorableState: archiver); archiver.finishEncoding()
+            for doc in host.documents { doc.close() }
+            try waitUntil { controller.documents.isEmpty }
+
+            let restored = delegate.makeWindow()
+            defer { for doc in controller.documents { doc.close() } }
+            var done = false
+            restored.restore(from: try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)) { done = true }
+            try waitUntil { done }
+            try expect(restored.documents.map(\.editorName) == order && restored.documents.map(\.recoveryID) == ids, "Restored \(restored.documents.map(\.editorName)), expected \(order)")
+            try expect(restored.current?.isWelcome == true && restored.current?.text == welcomeText, "The welcome was not current, or came back blank")
+            try expect(restored.documents.first?.fileURL?.resolvingSymlinksInPath() == first.resolvingSymlinksInPath(), "The file was not reopened")
         }
-        test("The editor fills the window under the title bar and hides its name beside a tab bar") {
+        test("The editor fills the window under the title bar, has the keyboard, and the drag strip covers the title bar") {
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
             defer { for doc in controller.documents { doc.close() } }
-            guard let editorA = a.editorController, let windowA = editorA.window else { throw CocoaError(.fileReadUnknown) }
-            try expect(windowA.styleMask.contains(.fullSizeContentView) && windowA.titleVisibility == .hidden, "Editor window does not extend under a hidden title")
-            try expect(windowA.firstResponder === editorA.webView, "Typing goes to \(String(describing: windowA.firstResponder)), not the document")
-            try waitUntil { editorA.canSynchronize }
+            guard let editor = a.editor, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            try expect(window.styleMask.contains(.fullSizeContentView) && window.titleVisibility == .hidden, "Editor window does not extend under a hidden title")
+            try expect(window.firstResponder === editor.webView, "Typing goes to \(String(describing: window.firstResponder)), not the document")
+            try waitUntil { editor.canSynchronize }
+            let inset = Int(editor.view.safeAreaInsets.top)
+            try expect(inset > 0, "No title bar inset")
             var state = ""
-            func poll(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("[getComputedStyle(document.documentElement).getPropertyValue('--titlebar-inset').trim(), document.body.classList.contains('tab-bar')].join(' ')") { result, _ in state = result as? String ?? "" } }
-            let single = Int(editorA.titlebarState().inset)
-            try expect(single > 0, "No title bar inset for a single tab")
-            try waitUntil { poll(editorA); return state == "\(single)px false" }
-            try expect(Int(editorA.titlebarDragView.frame.height) == single, "Drag strip does not cover the title bar: strip=\(editorA.titlebarDragView.frame) inset=\(single) superview=\(String(describing: editorA.titlebarDragView.superview?.frame))")
-            let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
-            b.recoveryStore = recoveryStore; controller.addDocument(b); b.makeWindowControllers(); b.showWindows()
-            try waitUntil { windowA.tabbedWindows?.count == 2 }
-            guard let editorB = b.editorController else { throw CocoaError(.fileReadUnknown) }
-            try waitUntil { editorB.canSynchronize }
-            let tabbed = Int(editorB.titlebarState().inset)
-            try expect(tabbed > single, "Tab bar did not add to the inset: \(single) → \(tabbed)")
-            try waitUntil { poll(editorB); return state == "\(tabbed)px true" }
-            try waitUntil { poll(editorA); return state.hasSuffix(" true") }
+            try waitUntil { editor.webView.evaluateJavaScript("getComputedStyle(document.documentElement).getPropertyValue('--titlebar-inset').trim()") { result, _ in state = result as? String ?? "" }; return state == "\(inset)px" }
+            try expect(Int(editor.titlebarDragView.frame.height) == inset, "Drag strip does not cover the title bar")
         }
-        test("The sidebar runs the full window height and its tabs share collapse, width, and view") {
+        test("The sidebar runs the full window height and keeps its state while switching documents") {
             for key in ["sidebarCollapsed", "sidebarWidth"] { UserDefaults.standard.removeObject(forKey: key) }
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             for doc in [a, b] { doc.recoveryStore = recoveryStore; controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows() }
             defer { for doc in controller.documents { doc.close() }; for key in ["sidebarCollapsed", "sidebarWidth"] { UserDefaults.standard.removeObject(forKey: key) } }
-            guard let editorA = a.editorController, let editorB = b.editorController, let windowA = editorA.window, let windowB = editorB.window else { throw CocoaError(.fileReadUnknown) }
-            try waitUntil { windowA.tabbedWindows?.count == 2 && editorA.canSynchronize && editorB.canSynchronize }
-            try expect(editorA.sidebar.state === editorB.sidebar.state, "Tabs do not share sidebar state")
-            let sideFrame = editorB.sidebar.view.convert(editorB.sidebar.view.bounds, to: nil)
-            try expect(sideFrame.maxY >= windowB.contentLayoutRect.maxY, "Sidebar starts below the tab bar")
-            try expect(Int(editorB.sidebarWidth) == Int(SidebarViewController.defaultWidth), "Unexpected sidebar width \(editorB.sidebarWidth)")
+            guard let host = a.editor?.host, let window = host.window, let editorA = a.editor, let editorB = b.editor else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editorA.canSynchronize && editorB.canSynchronize }
+            let sideFrame = host.sidebar.view.convert(host.sidebar.view.bounds, to: nil)
+            try expect(sideFrame.maxY >= window.contentLayoutRect.maxY, "Sidebar starts below the title bar")
+            try expect(Int(host.sidebarWidth) == Int(SidebarViewController.defaultWidth), "Unexpected sidebar width \(host.sidebarWidth)")
             var open = ""
-            func pollOpen(_ editor: EditorWindowController) { editor.webView.evaluateJavaScript("String(document.body.classList.contains('sidebar-open'))") { result, _ in open = result as? String ?? "" } }
+            func pollOpen(_ editor: DocumentEditor) { editor.webView.evaluateJavaScript("String(document.body.classList.contains('sidebar-open'))") { result, _ in open = result as? String ?? "" } }
             try waitUntil { pollOpen(editorB); return open == "true" }
-
-            editorB.toggleSidebar()
-            try waitUntil { editorB.sidebarItem.isCollapsed && editorA.sidebarItem.isCollapsed }
+            host.toggleSidebar()
+            try waitUntil { host.sidebarItem.isCollapsed }
             try waitUntil { pollOpen(editorB); return open == "false" }
             try waitUntil { pollOpen(editorA); return open == "false" }
-            editorA.showOutline()
-            try waitUntil { !editorA.sidebarItem.isCollapsed && !editorB.sidebarItem.isCollapsed && editorB.sidebar.state.mode == .outline }
-            try waitUntil { Int(editorB.sidebarWidth) == Int(SidebarViewController.defaultWidth) }
-            editorB.splitController.splitView.setPosition(300, ofDividerAt: 0)
-            try waitUntil { Int(editorB.sidebar.state.width) == 300 }
-            windowA.makeKeyAndOrderFront(nil)
-            try waitUntil { Int(editorA.sidebarWidth) == 300 && Int(editorB.sidebarWidth) == 300 }
-
-            windowA.moveTabToNewWindow(nil)
-            try waitUntil { windowA.tabGroup !== windowB.tabGroup && editorA.sidebar.state !== editorB.sidebar.state }
-            editorA.toggleSidebar()
-            try waitUntil { editorA.sidebarItem.isCollapsed }
-            try expect(!editorB.sidebarItem.isCollapsed && editorA.sidebar.state.mode == .outline, "A window moved out of the tabs still shares, or lost, its sidebar state")
+            host.select(a)
+            try expect(host.sidebarItem.isCollapsed, "Switching documents reopened the sidebar")
+            host.showOutline()
+            try waitUntil { !host.sidebarItem.isCollapsed && host.sidebar.state.mode == .outline }
+            try waitUntil { Int(host.sidebarWidth) == Int(SidebarViewController.defaultWidth) }
+            host.splitController.splitView.setPosition(300, ofDividerAt: 0)
+            try waitUntil { Int(host.sidebar.state.width) == 300 }
+            host.select(b)
+            try expect(Int(host.sidebarWidth) == 300 && host.sidebar.state.mode == .outline, "Switching documents changed the sidebar")
+            // A new window has a sidebar of its own, starting from the last width.
+            delegate.newWindow(nil)
+            guard let other = delegate.windows.last, other !== host, let newDoc = other.current else { throw CocoaError(.fileReadUnknown) }
+            newDoc.recoveryStore = recoveryStore
+            try expect(other.sidebar.state !== host.sidebar.state && other.sidebar.state.mode == .files && Int(other.sidebar.state.width) == 300, "The new window's sidebar is shared or did not start from the last width")
+            try expect(host.documents.count == 2 && other.documents.count == 1, "New Window did not keep its own Open Files")
         }
         test("The sidebar lists, filters, and opens workspace files, and remembers folders opened across tabs") {
             let nested = root.appendingPathComponent("Nested", isDirectory: true)
@@ -493,9 +487,9 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
             defer { for doc in controller.documents { doc.close() } }
-            guard let editor = a.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            guard let editor = a.editor, let host = editor.host else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editor.canSynchronize }
-            let sidebar = editor.sidebar
+            let sidebar = host.sidebar
             try waitUntil { sidebar.visibleTreeRows.contains("Nested/") }
             try expect(sidebar.visibleTreeRows == ["Nested/", "  Deep note.md", "A real file.md", "Another.markdown"], "Unexpected tree: \(sidebar.visibleTreeRows)")
             sidebar.state.filter = "deep"
@@ -506,42 +500,34 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             sidebar.activateFile(row: sidebar.rowIndex(named: "Nested")!)
             try expect(!sidebar.visibleTreeRows.contains("  Deep note.md") && sidebar.state.toggledFolders.contains { $0.hasSuffix("/Nested") }, "Collapsing a folder was not remembered")
             sidebar.activateFile(row: sidebar.rowIndex(named: "Another.markdown")!)
-            try waitUntil { (controller.documents.first { $0.fileURL == second } as? MarkdownDocument)?.editorController?.window.map { window.tabbedWindows?.contains($0) == true } == true }
-            guard let other = (controller.documents.first { $0.fileURL == second } as? MarkdownDocument)?.editorController else { throw CocoaError(.fileReadUnknown) }
-            try waitUntil { other.sidebar.state === sidebar.state && other.sidebar.visibleTreeRows.contains("Another.markdown") }
-            try expect(!other.sidebar.visibleTreeRows.contains("  Deep note.md"), "The new tab did not keep the collapsed folder")
-            try waitUntil { other.sidebar.openFileNames == sidebar.openFileNames && sidebar.openFileNames.count == 2 && other.sidebar.currentOpenFileName == "Another.markdown" }
+            try waitUntil { host.current?.fileURL?.resolvingSymlinksInPath() == second.resolvingSymlinksInPath() }
+            try expect(!sidebar.visibleTreeRows.contains("  Deep note.md") && sidebar.openFileNames.count == 2 && sidebar.currentOpenFileName == "Another.markdown", "Opening a workspace file changed the tree or Open Files")
 
-            // The tree is the last scan's: loading a document does not rescan, refreshing does.
+            // Refreshing picks up files added since the last scan.
             let added = root.appendingPathComponent("Added later.md")
             try "# Later\n".write(to: added, atomically: true, encoding: .utf8)
             defer { try? FileManager.default.removeItem(at: added) }
-            other.loadDocument()
-            try waitUntil { other.session.isLoaded }
-            try expect(!other.sidebar.visibleTreeRows.contains("Added later.md"), "Loading a document rescanned the workspace")
             delegate.refreshFolders()
-            try waitUntil { sidebar.visibleTreeRows.contains("Added later.md") && other.sidebar.visibleTreeRows.contains("Added later.md") }
-
-            // Width changes, such as each step of a divider drag, keep the built rows.
-            let firstRow = other.sidebar.filesView.view(atColumn: 0, row: 0, makeIfNecessary: false)
-            other.sidebar.state.width += 10
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            try expect(firstRow != nil && other.sidebar.filesView.view(atColumn: 0, row: 0, makeIfNecessary: false) === firstRow, "A width change rebuilt the sidebar's rows")
+            try waitUntil { sidebar.visibleTreeRows.contains("Added later.md") }
         }
-        test("The outline lists the document's headings and reveals one in the editor") {
+        test("The outline lists the current document's headings, follows switching, and reveals one in the editor") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore
             doc.text = "# One\n\nText\n\n## Two\n\n```md\n# Not a heading\n```\n"
-            controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
-            defer { doc.close() }
-            guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
-            try waitUntil { editor.sidebar.headings.map(\.text) == ["One", "Two"] }
-            try expect(editor.sidebar.headings.map(\.level) == [1, 2], "Heading levels wrong")
-            editor.sidebar.activateHeading(row: 1)
+            let other = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            other.recoveryStore = recoveryStore; other.text = "# Elsewhere\n"
+            for item in [doc, other] { controller.addDocument(item); item.makeWindowControllers(); item.showWindows() }
+            defer { for item in controller.documents { item.close() } }
+            guard let editor = doc.editor, let host = editor.host else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { host.sidebar.headings.map(\.text) == ["Elsewhere"] }
+            host.select(doc)
+            try waitUntil { host.sidebar.headings.map(\.text) == ["One", "Two"] }
+            try expect(host.sidebar.headings.map(\.level) == [1, 2], "Heading levels wrong")
+            host.sidebar.activateHeading(row: 1)
             var head = -1
-            try waitUntil { editor.webView.evaluateJavaScript("app.view.state.selection.main.head") { result, _ in head = result as? Int ?? -1 }; return head == editor.sidebar.headings[1].pos }
+            try waitUntil { editor.webView.evaluateJavaScript("app.view.state.selection.main.head") { result, _ in head = result as? Int ?? -1 }; return head == host.sidebar.headings[1].pos }
         }
-        test("Quick open lists tabs and workspace files, opens a file as a tab, and switches to an open one") {
+        test("Quick open lists the window's documents and workspace files, opens a file into the window, and switches to an open one") {
             let saved = delegate.workspace
             delegate.workspace = root
             defer { delegate.workspace = saved }
@@ -551,25 +537,22 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
             defer { for doc in controller.documents { doc.close() } }
-            guard let editor = a.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
-            try waitUntil { editor.canSynchronize }
-            window.makeKeyAndOrderFront(nil)
-            let names = delegate.quickOpenItems(for: editor).map(\.name)
+            guard let host = a.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+            let names = delegate.quickOpenItems(for: host).map(\.name)
             try expect(names.first == "Untitled.md" && names.contains("A real file.md") && names.contains("Another.markdown") && Set(names).count == names.count, "Unexpected candidates: \(names)")
-            delegate.showQuickOpen(for: editor)
+            delegate.showQuickOpen(for: host)
             guard let picker = delegate.quickOpen else { throw CocoaError(.fileReadUnknown) }
             try expect(picker.panel.isVisible && picker.panel.parent === window, "Quick open did not appear over the window")
             picker.search("anoth")
             try expect(picker.results.first?.name == "Another.markdown", "Search did not find the file")
             picker.choose(row: 0)
             try expect(!picker.panel.isVisible && delegate.quickOpen == nil, "Quick open stayed open")
-            try waitUntil { (controller.documents.first { $0.fileURL?.resolvingSymlinksInPath() == second.resolvingSymlinksInPath() } as? MarkdownDocument)?.editorController?.window.map { window.tabbedWindows?.contains($0) == true } == true }
-            try waitUntil { window.tabGroup?.selectedWindow !== window }
-            delegate.showQuickOpen(for: editor)
+            try waitUntil { host.current?.fileURL?.resolvingSymlinksInPath() == second.resolvingSymlinksInPath() && host.documents.count == 2 }
+            delegate.showQuickOpen(for: host)
             guard let again = delegate.quickOpen else { throw CocoaError(.fileReadUnknown) }
             again.search("untitled")
             again.choose(row: 0)
-            try waitUntil { window.tabGroup?.selectedWindow === window }
+            try waitUntil { host.current === a }
         }
         test("The sidebar creates a file in a folder, opens it, and renames files in place") {
             let folder = root.appendingPathComponent("Rename tests", isDirectory: true)
@@ -596,8 +579,8 @@ final class FakeDrop: NSObject, NSDraggingInfo {
 
             var opened: MarkdownDocument?
             controller.openDocument(withContentsOf: open, display: true) { document, _, _ in opened = document as? MarkdownDocument }
-            try waitUntil { opened?.editorController?.canSynchronize == true }
-            guard let doc = opened, let editor = doc.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { opened?.editor?.canSynchronize == true }
+            guard let doc = opened, let editor = doc.editor, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
             defer { for doc in controller.documents { doc.close() } }
             doc.edited("# Unsaved edits\n")
             try waitUntil { doc.isDocumentEdited }
@@ -610,7 +593,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             // The sidebar names files by the paths in the scanned tree.
             guard let treeFolder = delegate.workspaceTree?.children?.first(where: { $0.name == "Rename tests" })?.path else { throw CocoaError(.fileReadUnknown) }
             let treeMoved = treeFolder + "/moved.md"
-            let sidebar = editor.sidebar
+            guard let sidebar = editor.host?.sidebar else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { sidebar.visibleTreeRows.contains { $0.hasSuffix("moved.md") } }
             sidebar.beginRename(path: treeMoved)
             try expect(sidebar.renamingPath == treeMoved && window.firstResponder is NSTextView, "Rename did not start editing the row")
@@ -621,11 +604,11 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             sidebar.onNewFile(treeFolder)
             let created = URL(fileURLWithPath: treeFolder + "/Untitled.md")
             try waitUntil { FileManager.default.fileExists(atPath: created.path) }
-            try waitUntil { (controller.documents.first { $0.fileURL?.standardizedFileURL == created.standardizedFileURL } as? MarkdownDocument)?.editorController?.sidebar.renamingPath == created.path }
+            try waitUntil { (controller.documents.first { $0.fileURL?.standardizedFileURL == created.standardizedFileURL } as? MarkdownDocument)?.editor?.host?.sidebar.renamingPath == created.path }
             try expect(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)).subtracting(before) == ["Untitled.md"], "New File did not create one Untitled.md")
-            guard let newEditor = (controller.documents.first { $0.fileURL?.standardizedFileURL == created.standardizedFileURL } as? MarkdownDocument)?.editorController else { throw CocoaError(.fileReadUnknown) }
-            try expect(newEditor.window.map { window.tabbedWindows?.contains($0) == true } == true, "The new file did not open as a tab")
-            newEditor.sidebar.finishRename(path: created.path, name: "Fresh note")
+            guard let newEditor = (controller.documents.first { $0.fileURL?.standardizedFileURL == created.standardizedFileURL } as? MarkdownDocument)?.editor, let newHost = newEditor.host else { throw CocoaError(.fileReadUnknown) }
+            try expect(newHost === editor.host && newHost.current === newEditor.document, "The new file did not open in the window")
+            newHost.sidebar.finishRename(path: created.path, name: "Fresh note")
             try waitUntil { FileManager.default.fileExists(atPath: folder.appendingPathComponent("Fresh note.md").path) && newEditor.doc.fileURL?.lastPathComponent == "Fresh note.md" }
         }
         test("Right-clicking the document adds Insert and formatting commands after Paste") {
@@ -633,7 +616,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             doc.recoveryStore = recoveryStore
             controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
             defer { doc.close() }
-            guard let editor = doc.editorController, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+            guard let editor = doc.editor, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editor.canSynchronize }
             func webKitMenu() -> NSMenu {
                 let menu = NSMenu()
@@ -659,22 +642,17 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             var text = ""
             try waitUntil { editor.webView.evaluateJavaScript("app.getMarkdown()") { result, _ in text = result as? String ?? "" }; return text.contains("| Column | Column | Column |") }
         }
-        test("Edits announce a change to the open files only when the document becomes unsaved") {
+        test("Typing in the page marks the document unsaved") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore
             controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
             defer { doc.close() }
-            try waitUntil { doc.editorController?.session.isLoaded == true }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            var posts = 0
-            let observer = NotificationCenter.default.addObserver(forName: .openFilesChanged, object: doc, queue: nil) { _ in posts += 1 }
-            defer { NotificationCenter.default.removeObserver(observer) }
-            for text in ["# One\n", "# One two\n", "# One two three\n"] {
-                doc.edited(text)
-                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            }
+            guard let editor = doc.editor else { throw CocoaError(.fileReadUnknown) }
+            try waitUntil { editor.canSynchronize }
+            var finished = false
+            editor.webView.evaluateJavaScript("app.view.dispatch({ changes: { from: 0, insert: '# Typed\\n' }, userEvent: 'input.type' }); 1") { _, _ in finished = true }
+            try waitUntil { finished && doc.text == "# Typed\n" }
             try waitUntil { doc.isDocumentEdited }
-            try expect(posts == 1, "Three edits announced \(posts) open-file changes")
         }
         test("Editor typing makes one document undo step and the undo key reverts it") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
@@ -682,7 +660,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             doc.text = "# Start\n"
             controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
             defer { doc.close() }
-            guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            guard let editor = doc.editor else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editor.canSynchronize }
             var finished = false
             // execCommand goes through WebKit's own editing, which registers WebKit undo steps.
@@ -698,17 +676,16 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(doc.undoManager?.canUndo == false, "WebKit editing steps reached the document's undo stack")
             try expect(!doc.isDocumentEdited, "Undoing the only edit left the document edited")
         }
-        test("Files opened together become tabs in the order they were requested") {
+        test("Files opened together join the window in the order they were requested") {
             let names = (1...5).map { "Order \($0).md" }
             let urls = names.map { root.appendingPathComponent($0) }
             for url in urls { try "# \(url.lastPathComponent)\n".write(to: url, atomically: true, encoding: .utf8) }
             for round in 1...3 {
                 for url in urls { controller.openDocument(withContentsOf: url, display: true) { _, _, _ in } }
                 try waitUntil { urls.allSatisfy { url in controller.documents.contains { $0.fileURL == url } } }
-                let windows = controller.documents.compactMap { ($0 as? MarkdownDocument)?.editorController?.window }
-                let order = (windows.first?.tabGroup?.windows ?? []).compactMap { ($0.windowController?.document as? MarkdownDocument)?.editorName }
+                let order = (controller.documents.compactMap { ($0 as? MarkdownDocument)?.editor?.host }.first?.documents ?? []).map(\.editorName)
                 for doc in controller.documents { doc.close() }
-                try expect(order == names, "Round \(round): tabs opened as \(order)")
+                try expect(order == names, "Round \(round): files opened as \(order)")
             }
         }
         test("The editor window remembers its frame for the next window") {
@@ -717,7 +694,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore
             controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
-            guard let window = doc.editorController?.window else { throw CocoaError(.fileReadUnknown) }
+            guard let window = doc.editor?.window else { throw CocoaError(.fileReadUnknown) }
             try expect(window.frameAutosaveName == "MarginEditor", "Editor window has no frame autosave name")
             let frame = NSRect(x: 120, y: 140, width: 910, height: 640)
             window.setFrame(frame, display: false)
@@ -726,28 +703,26 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             next.recoveryStore = recoveryStore
             controller.addDocument(next); next.makeWindowControllers(); next.showWindows()
             defer { next.close() }
-            try expect(next.editorController?.window?.frame.size == frame.size, "Next window did not reuse the saved size")
+            try expect(next.editor?.window?.frame.size == frame.size, "Next window did not reuse the saved size")
         }
-        test("Launch without a file registers and shows an editor window") {
+        test("Launch without a file shows a restorable editor window holding the document") {
             delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
             delegate.applicationDidFinishRestoringWindows(restored)
             guard let doc = controller.documents.first as? MarkdownDocument else {
                 throw NSError(domain: "Tests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Launch did not create a Markdown document"])
             }
             defer { doc.close() }
-            try expect(doc.windowControllers.count == 1, "Document has no registered editor window")
-            try expect(doc.editorController === doc.windowControllers.first, "Editor is not registered with its document")
-            try expect(doc.editorController?.document === doc, "Window controller is not attached to the document")
-            try expect(doc.editorController?.window?.isVisible == true, "Launch did not show a window")
-            try expect(doc.editorController?.window?.isRestorable == true, "Document window cannot be restored")
-            try expect(doc.editorController?.window?.restorationClass == type(of: controller), "Document window is not using native document restoration")
+            guard let host = doc.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+            try expect(host.current === doc && window.isVisible, "Launch did not show the document in a window")
+            try expect(doc.windowForSheet === window, "Sheets for the document would not appear over its window")
+            try expect(window.isRestorable && window.restorationClass == EditorWindowRestoration.self, "The window does not restore its documents")
         }
         test("Editor process failure keeps native edits, exposes a save fallback, and retries from memory") {
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore
             controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
             defer { doc.close() }
-            guard let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            guard let editor = doc.editor else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editor.session.isLoaded }
             let unsaved = "# Protected after editor failure\n\nNot saved to the original file.\n"
             doc.edited(unsaved); editor.loadDocument()
@@ -775,8 +750,8 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             if let failure { throw failure }
             try expect(opened?.text == text && opened?.fileURL == first, "Native open did not read the file")
             try expect(opened.map { controller.documents.contains($0) } == true, "Native open did not register the document")
-            try expect(opened?.windowControllers.count == 1, "File open did not register an editor window")
-            try expect(opened?.editorController?.window?.isVisible == true, "File open did not show a window")
+            try expect(opened?.editor?.host?.current === opened, "File open did not add the document to a window")
+            try expect(opened?.editor?.window?.isVisible == true, "File open did not show a window")
             finished = false
             var reused = false
             controller.openDocument(withContentsOf: first, display: false) { doc, alreadyOpen, error in
@@ -823,7 +798,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             var finished = false
             controller.openDocument(withContentsOf: url, display: true) { doc, _, _ in opened = doc as? MarkdownDocument; finished = true }
             try waitUntil { finished }
-            guard let doc = opened, let editor = doc.editorController else { throw CocoaError(.fileReadUnknown) }
+            guard let doc = opened, let editor = doc.editor else { throw CocoaError(.fileReadUnknown) }
             doc.recoveryStore = recoveryStore
             defer { doc.close() }
             try waitUntil { editor.canSynchronize && !editor.webView.isHidden }

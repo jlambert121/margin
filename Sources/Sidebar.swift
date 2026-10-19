@@ -21,8 +21,7 @@ extension Notification.Name {
     static let sidebarStateChanged = Notification.Name("Margin.sidebarStateChanged")
 }
 
-// Sidebar layout and navigation shared by every tab in a window's tab group,
-// so switching tabs leaves the sidebar as it was.
+// A window's sidebar layout and navigation, which stay as they are while switching documents.
 final class SidebarState {
     var collapsed: Bool { didSet { if collapsed != oldValue { defaults.set(collapsed, forKey: "sidebarCollapsed"); changed() } } }
     var width: CGFloat { didSet { if abs(width - oldValue) > 0.5 { defaults.set(Double(width), forKey: "sidebarWidth"); changed() } } }
@@ -32,36 +31,18 @@ final class SidebarState {
     var toggledFolders: Set<String> = [] { didSet { if toggledFolders != oldValue { changed() } } }
     private let defaults: UserDefaults
 
-    // New tab groups start from the last collapsed state and width.
+    // New windows start from the last collapsed state and width.
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         collapsed = defaults.bool(forKey: "sidebarCollapsed")
         let stored = defaults.double(forKey: "sidebarWidth")
         width = stored > 0 ? CGFloat(stored) : SidebarViewController.defaultWidth
     }
-    func copy() -> SidebarState {
-        let copy = SidebarState(defaults: defaults)
-        copy.collapsed = collapsed; copy.width = width; copy.mode = mode; copy.filter = filter; copy.toggledFolders = toggledFolders
-        return copy
-    }
     func isExpanded(_ folder: FolderEntry, depth: Int) -> Bool { (depth == 0) != toggledFolders.contains(folder.path) }
     func setExpanded(_ expanded: Bool, folder: FolderEntry, depth: Int) {
         if expanded == (depth == 0) { toggledFolders.remove(folder.path) } else { toggledFolders.insert(folder.path) }
     }
     private func changed() { NotificationCenter.default.post(name: .sidebarStateChanged, object: self) }
-}
-
-enum SidebarStates {
-    private static let byGroup = NSMapTable<NSWindowTabGroup, SidebarState>.weakToStrongObjects()
-    // A window joining a group takes the group's state. A window that becomes
-    // a group of its own keeps what it had, as a copy once another group shares it.
-    static func state(for group: NSWindowTabGroup, current: SidebarState) -> SidebarState {
-        if let existing = byGroup.object(forKey: group) { return existing }
-        let shared = byGroup.objectEnumerator()?.allObjects.contains { ($0 as AnyObject) === current } == true
-        let state = shared ? current.copy() : current
-        byGroup.setObject(state, forKey: group)
-        return state
-    }
 }
 
 final class SidebarNode {
@@ -96,6 +77,7 @@ final class SidebarRowView: NSTableRowView {
 
 final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSMenuDelegate {
     static let defaultWidth: CGFloat = 244
+    private static let openFileType = NSPasteboard.PasteboardType("com.infiniteviewtech.margin.open-file")
     static let accent = NSColor(name: "MarginAccent") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(srgbRed: 0xa2 / 255, green: 0xb9 / 255, blue: 0x9a / 255, alpha: 1)
@@ -106,6 +88,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     var state = SidebarState() { didSet { if state !== oldValue { appliedTree = nil; observeState(); applyState() } } }
     var onSelectOpenFile: (String) -> Void = { _ in }
     var onCloseOpenFile: (String) -> Void = { _ in }
+    // An open file's id and its new position among the open files.
+    var onMoveOpenFile: (String, Int) -> Void = { _, _ in }
     var onOpenPath: (String) -> Void = { _ in }
     var onReveal: (Int) -> Void = { _ in }
     // A folder path to create a file in, and a file path with its new name.
@@ -169,6 +153,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         filesView.indentationPerLevel = 12
         filesView.menu = NSMenu()
         filesView.menu?.delegate = self
+        filesView.registerForDraggedTypes([Self.openFileType])
+        filesView.setDraggingSourceOperationMask(.move, forLocal: true)
         filesView.setAccessibilityLabel("Files")
         filesScroll.documentView = filesView
         filesScroll.hasVerticalScroller = true; filesScroll.drawsBackground = false; filesScroll.borderType = .noBorder
@@ -318,6 +304,25 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case .header: return 28
         default: return 26
         }
+    }
+    // Open files reorder by dragging within their section.
+    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+        guard case let .openFile(file) = (item as? SidebarNode)?.kind else { return nil }
+        let writer = NSPasteboardItem()
+        writer.setString(file.id, forType: Self.openFileType)
+        return writer
+    }
+    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
+        guard info.draggingPasteboard.string(forType: Self.openFileType) != nil, !openFiles.isEmpty else { return [] }
+        // Root rows are the Open Files header, then the open files.
+        let position = item == nil && index >= 1 ? min(index, openFiles.count + 1) : (index < 1 ? 1 : openFiles.count + 1)
+        if item != nil || position != index { outlineView.setDropItem(nil, dropChildIndex: position) }
+        return .move
+    }
+    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+        guard let id = info.draggingPasteboard.string(forType: Self.openFileType), item == nil, index >= 1 else { return false }
+        onMoveOpenFile(id, min(index - 1, openFiles.count))
+        return true
     }
     func outlineViewItemDidExpand(_ notification: Notification) { folderToggled(notification, expanded: true) }
     func outlineViewItemDidCollapse(_ notification: Notification) { folderToggled(notification, expanded: false) }

@@ -64,6 +64,24 @@
     rightClick(word + 2);
     assert(view.state.selection.main.from === word - 1 && view.state.selection.main.to === word + 4, 'Right-click inside a selection changed it');
   });
+  await test('Command-Shift-[ and ] ask native to switch files; plain Command-[ and ] change indentation', () => {
+    app.load({ text: '    indented line\n', token: 'switch-load' });
+    app.view.dispatch({ selection: { anchor: 6 } });
+    // With Command held, WebKit reports Shift-[ as "[".
+    const presses = [['[', 'BracketLeft'], [']', 'BracketRight']];
+    for (const [key, code] of presses) {
+      const action = code === 'BracketLeft' ? 'previousFile' : 'nextFile';
+      for (const target of [app.view.contentDOM, document.body]) {
+        const count = messages.length;
+        const event = new KeyboardEvent('keydown', { key, code, shiftKey: true, metaKey: true, bubbles: true, cancelable: true });
+        target.dispatchEvent(event);
+        assert(event.defaultPrevented && messages.slice(count).some(message => message.action === action), `Command-Shift-${key} from ${target.className || target.nodeName} did not reach native`);
+      }
+    }
+    const plain = key => app.view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key, code: key === '[' ? 'BracketLeft' : 'BracketRight', metaKey: true, bubbles: true, cancelable: true }));
+    plain('['); assert(app.getMarkdown() === '  indented line\n', 'Command-[ did not outdent: ' + JSON.stringify(app.getMarkdown()));
+    plain(']'); assert(app.getMarkdown() === '    indented line\n', 'Command-] did not indent: ' + JSON.stringify(app.getMarkdown()));
+  });
   await test('Undo keys in the document go to native undo instead of the editor histories', () => {
     app.load({ text: '# Keep me\n', token: 'undo-load' });
     const key = (target, init) => {

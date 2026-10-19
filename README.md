@@ -20,16 +20,17 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding
 - Tables edit as a grid: click a cell to edit its Markdown; Tab/Shift-Tab, Enter, and the up/down arrows move between cells, and Tab in the last cell adds a row. Right-click a cell to insert, delete, or move rows and columns, set column alignment, or edit the table as Markdown. Cell edits rewrite only that cell's text; column changes rewrite the table's rows.
 - Right-click the document to insert a table, link, image, or code block, or to change a paragraph's style or format text, alongside the usual spelling, Look Up, and Cut/Copy/Paste items. Right-clicking a blank line puts the cursor there.
 - Source mode (⌘/) shows the same document with all syntax visible.
-- A native sidebar that runs the full window height beside the tabs, with the open files, the workspace folder tree and its filter, and a clickable document outline. The tabs in a window share it: whether it is shown, its width, Files or Outline, opened folders, and the filter stay the same when switching tabs. Its toggle sits at its top, and moves to the toolbar while the sidebar is hidden.
-- Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling. Documents open as native macOS tabs and can be dragged out into their own windows.
+- A native sidebar that runs the full window height, with the open files, the workspace folder tree and its filter, and a clickable document outline. It stays as it is while switching documents: whether it is shown, its width, Files or Outline, opened folders, and the filter. Its toggle sits at its top, and moves to the toolbar while the sidebar is hidden.
+- Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling.
+- A window holds several documents and shows one at a time; the sidebar's Open Files lists them. Click one to switch, × to close it, or drag to reorder; ⌘⇧[ and ⌘⇧] go to the previous and next. A new or opened document goes after the current one. Each window has its own list (File › New Window), and windows come back at launch with their documents in order, including unsaved untitled ones.
 - Files changed by another application reload automatically when there are no unsaved changes. With unsaved changes, a banner offers Reload, Keep mine, or Compare, which shows each disk change inline in source mode to keep or take one at a time or all at once.
 - Find and replace, optionally with regular expressions (`$1`, `$&`, and `$<name>` in replacements), and Go to Line (`line` or `line:column`; also opened by clicking the cursor position in the status bar).
 - Fenced code blocks are syntax highlighted in the language their info string names, for every language CodeMirror ships.
 - Brackets, double quotes, and backticks close as you type; typing `*`, `_`, or `~` over a selection wraps it.
 - Pasting from a web page or a document converts its formatting to Markdown: headings, emphasis, links, lists, tables, and code. Clipboard HTML without such structure, such as code copied from an editor, pastes as plain text, as does anything pasted into code or with Paste and Match Style.
 - YAML front matter at the top of a document shows as a labeled metadata block, and stays out of the outline, word count, HTML export, and printing.
-- Quick Open finds a file by name among the window's tabs, other open documents, recent files, and the workspace.
-- Right-click the workspace in the sidebar to create a file, rename one in place, or show it in Finder. Renaming a file that is open keeps its tab and unsaved edits.
+- Quick Open finds a file by name among the window's documents, other open documents, recent files, and the workspace.
+- Right-click the workspace in the sidebar to create a file, rename one in place, or show it in Finder. Renaming a file that is open keeps it open with its unsaved edits.
 - Word and character counts, line counts, estimated reading time, and the cursor's line and column.
 - Text zoom for the document text, remembered across windows and launches.
 - Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
@@ -44,9 +45,12 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding
 | ⌘O / ⇧⌘O | Open file / folder |
 | ⌥⌘P | Quick Open |
 | ⌘S / ⇧⌘S | Save / Save As |
-| ⌘W | Close |
+| ⌘W / ⇧⌘W | Close document / Close window |
+| ⇧⌘N | New window |
+| ⌘⇧[ / ⌘⇧] | Previous / next open file |
 | ⌘P | Print / Save as PDF |
 | ⌘Z / ⇧⌘Z (or ⌘Y) | Undo / Redo |
+| Tab / ⇧Tab, or ⌘] / ⌘[ | Indent / outdent |
 | ⌥⇧⌘V | Paste and Match Style |
 | ⌘F / ⌥⌘F | Find / Find and Replace |
 | ⌘L | Go to Line |
@@ -62,12 +66,13 @@ The standard macOS shortcuts also work: ⌘X / ⌘C / ⌘V, ⌘A, ⌘M, ⌘H, �
 
 In the find bar, Enter and ⇧Enter go to the next and previous match, Enter in the replace field replaces one, and Esc closes it. In Quick Open, ↑ and ↓ choose, Enter opens, and Esc closes. While renaming in the sidebar, Enter keeps the name and Esc cancels. Table cells have their own keys, listed above.
 
-Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open as tabs in the current window. In the sidebar's Open Files, click a tab to switch to it, or × to close it. The workspace list refreshes when Margin becomes the active app, or with its refresh button. The last workspace, appearance, app icon, and text zoom are remembered.
+Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open in the current window, after the current document. The workspace list refreshes when Margin becomes the active app, or with its refresh button. The last workspace, appearance, app icon, and text zoom are remembered.
 
 ## Implementation
 
-- `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, editor windows and their bridge to the web editor, menus, file panels, workspace scanning, export/printing, and the restricted local-image URL handler.
-- `Sources/Sidebar.swift`: the native sidebar and the sidebar state shared by a window's tabs.
+- `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, each document's editor and its bridge to the web editor, menus, file panels, workspace scanning, export/printing, and the restricted local-image URL handler.
+- `Sources/EditorWindow.swift`: a window, its ordered documents, and restoring them at launch.
+- `Sources/Sidebar.swift`: the native sidebar and its state.
 - `Sources/QuickOpen.swift`: the Quick Open panel and its file matching.
 - `Sources/Settings.swift`: stored settings and the Settings window.
 - `Sources/RecoveryStore.swift`: recovery copies of unsaved edits.
@@ -87,7 +92,7 @@ For Swift changes, rebuild the app. Web files are copied during every build. Run
 
 ```sh
 npm test               # syntax checks, native unit checks, and WebKit editor checks
-npm run test:native    # desktop checks: windows, tabs, the sidebar, open and save, files changed on disk
+npm run test:native    # desktop checks: windows and their documents, the sidebar, open and save, files changed on disk
 npm run test:webkit    # WebKit editor checks only; writes build/editor-screenshot.png
 ```
 

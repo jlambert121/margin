@@ -23,7 +23,8 @@ struct DiskVersion: Equatable {
 @objc(MarkdownDocument)
 final class MarkdownDocument: NSDocument {
     var text = ""
-    weak var editorController: EditorWindowController?
+    // Created when the document first joins a window; kept while it is open.
+    private(set) var editor: DocumentEditor?
     var recoveryStore = RecoveryStore.shared
     var recoveryID = UUID()
     var recoveredName: String?
@@ -40,9 +41,6 @@ final class MarkdownDocument: NSDocument {
     private var uncountedEdit = false
     private var savesWaitingForEdit: [() -> Void] = []
     private var recoveryErrorReported = false
-    // Set when AppKit restores this document's window at launch, which places
-    // the window in its tabs without calling showWindow.
-    private(set) var wasRestored = false
     var editorName: String { fileURL?.lastPathComponent ?? recoveredName ?? "Untitled.md" }
     override class var autosavesInPlace: Bool { true }
     override var fileURL: URL? { didSet { NotificationCenter.default.post(name: .openFilesChanged, object: self) } }
@@ -59,38 +57,31 @@ final class MarkdownDocument: NSDocument {
         if isDocumentEdited != wasEdited { NotificationCenter.default.post(name: .openFilesChanged, object: self) }
     }
 
+    // Documents have no window controllers of their own: a window holds several and
+    // shows one at a time. AppKit asks for windows when it opens or creates a document,
+    // which then joins the frontmost window.
     override func makeWindowControllers() {
-        let controller = EditorWindowController(document: self)
-        editorController = controller
-        addWindowController(controller)
+        guard editor?.host == nil else { return }
+        (NSDocumentController.shared as? DocumentController)?.app?.windowForNewDocuments().add(self)
+    }
+    func makeEditor() -> DocumentEditor {
+        if let editor { return editor }
+        let editor = DocumentEditor(document: self)
+        self.editor = editor
+        return editor
+    }
+    override func showWindows() {
+        if editor?.host == nil { makeWindowControllers() }
+        editor?.host?.select(self)
+        editor?.host?.showWindow(nil)
+    }
+    override var windowForSheet: NSWindow? { editor?.host?.window ?? super.windowForSheet }
+    // Save prompts appear over the document they ask about.
+    override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        editor?.host?.select(self)
+        super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
     }
     override func data(ofType typeName: String) throws -> Data { Data(text.utf8) }
-    override func encodeRestorableState(with coder: NSCoder) {
-        super.encodeRestorableState(with: coder)
-        coder.encode(recoveryID.uuidString, forKey: "Margin.recoveryID")
-        coder.encode(recoveredName, forKey: "Margin.recoveredName")
-        coder.encode(recoveredOriginalURL?.path, forKey: "Margin.recoveredOriginalPath")
-        coder.encode(isWelcome, forKey: "Margin.isWelcome")
-    }
-    override func restoreState(with coder: NSCoder) {
-        super.restoreState(with: coder)
-        wasRestored = true
-        if coder.containsValue(forKey: "Margin.recoveryID"),
-           let value = coder.decodeObject(of: NSString.self, forKey: "Margin.recoveryID") as String?,
-           let id = UUID(uuidString: value) { recoveryID = id }
-        if coder.containsValue(forKey: "Margin.recoveredName") {
-            recoveredName = coder.decodeObject(of: NSString.self, forKey: "Margin.recoveredName") as String?
-        }
-        if coder.containsValue(forKey: "Margin.recoveredOriginalPath"),
-           let path = coder.decodeObject(of: NSString.self, forKey: "Margin.recoveredOriginalPath") as String? {
-            recoveredOriginalURL = URL(fileURLWithPath: path)
-        }
-        // A clean welcome has no autosaved contents, so restoration recreates it empty.
-        if coder.decodeBool(forKey: "Margin.isWelcome"), text.isEmpty, !isDocumentEdited, let welcome = Self.welcomeText() {
-            isWelcome = true; text = welcome
-        }
-        editorController?.loadDocument()
-    }
     // Markdown is a flat UTF-8 file; avoid NSFileWrapper's dependency on
     // LaunchServices file-kind lookups when reading and writing its bytes.
     override func read(from url: URL, ofType typeName: String) throws {
@@ -101,7 +92,7 @@ final class MarkdownDocument: NSDocument {
     }
     override func read(from data: Data, ofType typeName: String) throws {
         text = try Self.decode(data)
-        if !reverting { editorController?.loadDocument() }
+        if !reverting { editor?.loadDocument() }
     }
     static func decode(_ data: Data) throws -> String {
         guard let decoded = String(data: data, encoding: .utf8) else {
@@ -118,9 +109,9 @@ final class MarkdownDocument: NSDocument {
         reverting = true
         defer { reverting = false }
         do { try super.revert(toContentsOf: url, ofType: typeName) }
-        catch { diskConflict = conflict; editorController?.loadDocument(); throw error }
+        catch { diskConflict = conflict; editor?.loadDocument(); throw error }
         clearRecovery()
-        editorController?.loadDocument(notice: revertNotice)
+        editor?.loadDocument(notice: revertNotice)
     }
     override func writeSafely(to url: URL, ofType typeName: String, for saveOperation: NSDocument.SaveOperationType) throws {
         let savedText = text
@@ -132,7 +123,7 @@ final class MarkdownDocument: NSDocument {
             // macOS does not report another application's write that lands
             // within about half a second of this one, so look once it has passed.
             scheduleDiskCheck(after: 1.5)
-            editorController?.loadMetadata()
+            editor?.loadMetadata()
         }
     }
     static func welcomeText() -> String? {
@@ -156,7 +147,7 @@ final class MarkdownDocument: NSDocument {
         undoManager?.registerUndo(withTarget: self) { doc in doc.restore(previous) }
         text = next
         scheduleRecovery()
-        editorController?.loadDocument()
+        editor?.loadDocument()
     }
     private func scheduleRecovery() {
         // Throttle rather than debounce: continuous typing still gets a draft.
@@ -198,13 +189,20 @@ final class MarkdownDocument: NSDocument {
         // process crash never reaches here, so its recovery copy remains.
         clearRecovery()
         diskCheck?.cancel(); diskCheck = nil
+        editor?.host?.remove(self)
+        editor?.tearDown()
+        editor = nil
         super.close()
     }
     // A periodic autosave would raise AppKit's conflict alert over the editor's
     // own choice. Closing and quitting still autosave and ask through AppKit.
     override func autosave(withImplicitCancellability autosavingIsImplicitlyCancellable: Bool, completionHandler: @escaping (Error?) -> Void) {
         if autosavingIsImplicitlyCancellable, diskConflict != nil { completionHandler(CocoaError(.userCancelled)); return }
-        super.autosave(withImplicitCancellability: autosavingIsImplicitlyCancellable, completionHandler: completionHandler)
+        // An untitled document's first autosave gives it the copy its window reopens it from.
+        super.autosave(withImplicitCancellability: autosavingIsImplicitlyCancellable) { [weak self] error in
+            self?.editor?.host?.window?.invalidateRestorableState()
+            completionHandler(error)
+        }
     }
     // NSDocument hears when another application changes the file, but only
     // refuses the next save. A clean document reloads; an edited one keeps its
@@ -227,8 +225,8 @@ final class MarkdownDocument: NSDocument {
             let finish = { activityCompletion(); completion() }
             guard let self else { finish(); return }
             // Edits still on their way from the editor decide whether reloading is safe.
-            guard let editorController = self.editorController, editorController.canSynchronize else { self.applyDiskChange(); finish(); return }
-            editorController.synchronize { synchronized in
+            guard let editor = self.editor, editor.canSynchronize else { self.applyDiskChange(); finish(); return }
+            editor.synchronize { synchronized in
                 if synchronized { self.applyDiskChange() }
                 finish()
             }
@@ -257,7 +255,7 @@ final class MarkdownDocument: NSDocument {
             reloadFromDisk()
         } else {
             diskConflict = DiskVersion(text: diskText, date: date)
-            editorController?.send("diskChanged", diskText)
+            editor?.send("diskChanged", diskText)
         }
     }
     private func readDiskText(_ url: URL) throws -> String {
@@ -305,8 +303,8 @@ final class MarkdownDocument: NSDocument {
             self.fileModificationDate = conflict.date
             self.save(withDelegate: self, didSave: #selector(self.document(_:didKeepMine:contextInfo:)), contextInfo: nil)
         }
-        guard let editorController, editorController.canSynchronize else { save(); return }
-        editorController.synchronize { [weak self] synchronized in
+        guard let editor, editor.canSynchronize else { save(); return }
+        editor.synchronize { [weak self] synchronized in
             if synchronized { save() } else { self?.resendDiskConflict() }
         }
     }
@@ -314,12 +312,12 @@ final class MarkdownDocument: NSDocument {
         if !didSave { resendDiskConflict() }
     }
     private func resendDiskConflict() {
-        if let diskConflict { editorController?.send("diskChanged", diskConflict.text) }
+        if let diskConflict { editor?.send("diskChanged", diskConflict.text) }
     }
     private func clearDiskConflict() {
         guard diskConflict != nil else { return }
         diskConflict = nil
-        editorController?.send("diskChanged", nil)
+        editor?.send("diskChanged", nil)
     }
     // NSDocument counts an undo-registered edit with updateChangeCount(.changeDone)
     // when the edit's undo group closes, possibly later still while it checks
@@ -356,8 +354,8 @@ final class MarkdownDocument: NSDocument {
     }
     private func saveAsSynchronized(_ sender: Any?) { super.saveAs(sender) }
     private func synchronizeBeforeSaving(_ action: @escaping () -> Void) {
-        guard let editorController, editorController.canSynchronize else { action(); return }
-        editorController.synchronize { success in if success { action() } }
+        guard let editor, editor.canSynchronize else { action(); return }
+        editor.synchronize { success in if success { action() } }
     }
     override func prepareSavePanel(_ savePanel: NSSavePanel) -> Bool {
         savePanel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
@@ -493,104 +491,65 @@ final class EditorContainerView: NSView {
     }
 }
 
-// Reports divider drags, which NSSplitViewController's own delegate role hides.
-final class EditorSplitViewController: NSSplitViewController {
-    var onResize: () -> Void = {}
-    override func splitViewDidResizeSubviews(_ notification: Notification) {
-        super.splitViewDidResizeSubviews(notification)
-        onResize()
-    }
-}
-
-final class EditorWindowController: NSWindowController, WKScriptMessageHandler, WKNavigationDelegate {
+// One document's editor: its web view and the bridge to it. A window shows one
+// document's editor at a time and keeps the others loaded in the background.
+final class DocumentEditor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let webView: EditorWebView
     let assets = AssetHandler()
+    let view = EditorContainerView()
+    let titlebarDragView = TitlebarDragView()
+    private(set) weak var document: MarkdownDocument?
+    weak var host: EditorWindowController?
     var ready = false
     private(set) var session = EditorSession()
     private(set) var hasEditorFailure = false
+    // The latest outline from the page, shown in the sidebar while this document is current.
+    private(set) var headings: [HeadingEntry] = []
     private var loadTimeout: DispatchWorkItem?
     private var lastReportedError: String?
     private var failureText: NSTextView?
-    private let logger = Logger(subsystem: "com.infiniteviewtech.margin", category: "Editor")
-    private var tabObservation: NSKeyValueObservation?
-    private weak var observedTabGroup: NSWindowTabGroup?
-    private var hasBeenShown = false
-    private let editorContainer = EditorContainerView()
-    let titlebarDragView = TitlebarDragView()
-    let sidebar = SidebarViewController()
-    let splitController = EditorSplitViewController()
-    let sidebarItem: NSSplitViewItem
-    private var collapseObservation: NSKeyValueObservation?
-    private var sidebarStateObserver: NSObjectProtocol?
-    private var applyingSidebarState = false
     private var failureView: NSView?
-    private var sentTitlebar: (inset: CGFloat, tabBar: Bool)?
+    private var sentTitlebarInset: CGFloat?
+    private let logger = Logger(subsystem: "com.infiniteviewtech.margin", category: "Editor")
     var isShowingFailure: Bool { failureView != nil }
-    var doc: MarkdownDocument { document as! MarkdownDocument }
+    var doc: MarkdownDocument { document! }
+    var window: NSWindow? { host?.window }
     private var app: AppDelegate? { (NSDocumentController.shared as? DocumentController)?.app }
 
     init(document: MarkdownDocument) {
+        self.document = document
         let configuration = WKWebViewConfiguration()
         configuration.setURLSchemeHandler(assets, forURLScheme: "markdown-asset")
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         webView = EditorWebView(frame: .zero, configuration: configuration)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
-        window.minSize = NSSize(width: 700, height: 480)
-        window.titlebarAppearsTransparent = true
-        // The tab shows the name, and the toolbar shows it when there is no tab bar.
-        window.titleVisibility = .hidden
-        window.isReleasedWhenClosed = false
-        window.identifier = NSUserInterfaceItemIdentifier("MarkdownEditor")
-        window.isRestorable = true
-        sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-        sidebarItem.allowsFullHeightLayout = true
-        sidebarItem.canCollapse = true
-        sidebarItem.minimumThickness = 180; sidebarItem.maximumThickness = 420
+        super.init()
         webView.translatesAutoresizingMaskIntoConstraints = false
         titlebarDragView.translatesAutoresizingMaskIntoConstraints = false
-        editorContainer.addSubview(webView); editorContainer.addSubview(titlebarDragView)
+        view.addSubview(webView); view.addSubview(titlebarDragView)
         NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: editorContainer.topAnchor), webView.bottomAnchor.constraint(equalTo: editorContainer.bottomAnchor),
-            webView.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), webView.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor),
-            titlebarDragView.topAnchor.constraint(equalTo: editorContainer.topAnchor),
-            titlebarDragView.bottomAnchor.constraint(equalTo: editorContainer.safeAreaLayoutGuide.topAnchor),
-            titlebarDragView.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), titlebarDragView.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor)
+            webView.topAnchor.constraint(equalTo: view.topAnchor), webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor), webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            titlebarDragView.topAnchor.constraint(equalTo: view.topAnchor),
+            titlebarDragView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            titlebarDragView.leadingAnchor.constraint(equalTo: view.leadingAnchor), titlebarDragView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
-        let content = NSViewController()
-        content.view = editorContainer
-        splitController.splitViewItems = [sidebarItem, NSSplitViewItem(viewController: content)]
-        splitController.view.frame = NSRect(x: 0, y: 0, width: 1180, height: 820)
-        window.contentViewController = splitController
-        // Otherwise AppKit focuses the first field it finds, the sidebar's filter.
-        window.initialFirstResponder = webView
-        window.setContentSize(NSSize(width: 1180, height: 820))
-        window.center()
-        window.tabbingMode = .preferred
-        window.tabbingIdentifier = "MarginEditor"
-        super.init(window: window)
-        // Set on the controller, after init: adopting the window replaces the
-        // window's own autosave name with the controller's, which defaults to empty.
-        windowFrameAutosaveName = "MarginEditor"
-        editorContainer.onTopInsetChange = { [weak self] _ in self?.sendTitlebar() }
+        view.onTopInsetChange = { [weak self] _ in self?.sendTitlebar() }
         webView.onOpenFiles = { [weak self] urls in
-            guard let self, let window = self.window else { return }
-            self.app?.open(urls, asTabsIn: window)
+            guard let self, let host = self.host else { return }
+            self.app?.open(urls, in: host)
         }
         webView.documentMenuItems = { [weak self] in self?.documentMenuItems() ?? [] }
-        connectSidebar()
-        // NSDocument.addWindowController must attach us. Setting document here
-        // makes AppKit treat that later call as redundant, so the document's
-        // windowControllers stays empty and showWindows has nothing to show.
         webView.navigationDelegate = self
         configuration.userContentController.add(MessageBridge(target: self), name: "native")
-        // Let NSDocument attach the controller before any loading error needs
-        // the native document or its window.
-        DispatchQueue.main.async { [weak self] in self?.startEditor() }
+        startEditor()
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit {
-        loadTimeout?.cancel()
-        if let sidebarStateObserver { NotificationCenter.default.removeObserver(sidebarStateObserver) }
+    deinit { loadTimeout?.cancel() }
+    // The document closed; its page must not reach the app any more.
+    func tearDown() {
+        loadTimeout?.cancel(); loadTimeout = nil
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "native")
+        webView.stopLoading()
+        view.removeFromSuperview()
     }
     var canSynchronize: Bool { ready && session.isLoaded && !hasEditorFailure }
 
@@ -648,7 +607,7 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         alert.beginSheetModal(for: window)
     }
     private func showEditorFailure(_ message: String) {
-        guard !hasEditorFailure, document != nil, window != nil else { return }
+        guard !hasEditorFailure, document != nil else { return }
         logger.error("\(message, privacy: .private)")
         hasEditorFailure = true; ready = false
         loadTimeout?.cancel(); loadTimeout = nil
@@ -678,11 +637,11 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         view.addSubview(stack); view.addSubview(scroll)
         view.translatesAutoresizingMaskIntoConstraints = false
         // Shown in place of the editor, below the title bar strip so the window still drags.
-        editorContainer.addSubview(view, positioned: .below, relativeTo: titlebarDragView)
+        self.view.addSubview(view, positioned: .below, relativeTo: titlebarDragView)
         failureView = view
         NSLayoutConstraint.activate([
-            view.topAnchor.constraint(equalTo: editorContainer.safeAreaLayoutGuide.topAnchor), view.bottomAnchor.constraint(equalTo: editorContainer.bottomAnchor),
-            view.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor), view.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor),
+            view.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor), view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: self.view.leadingAnchor), view.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
             stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 36),
             stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 36),
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -36),
@@ -718,25 +677,23 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         assets.root = (doc.fileURL ?? doc.recoveredOriginalURL)?.deletingLastPathComponent()
         var payload: [String: Any] = ["text": doc.text, "token": token, "name": doc.editorName, "path": doc.fileURL?.path ?? "", "modified": doc.isDocumentEdited]
         if let zoom = app?.settings.textZoom { payload["textZoom"] = zoom }
-        let titlebar = titlebarState()
-        payload["titlebar"] = ["inset": titlebar.inset, "tabBar": titlebar.tabBar]
-        sentTitlebar = titlebar
-        payload["sidebarOpen"] = !sidebarItem.isCollapsed
+        payload["titlebar"] = ["inset": view.safeAreaInsets.top]
+        sentTitlebarInset = view.safeAreaInsets.top
+        if let host { payload["sidebarOpen"] = !host.sidebarItem.isCollapsed }
         if let notice { payload["notice"] = notice }
-        sidebar.currentPath = doc.fileURL?.path ?? ""
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
             evaluate("window.app.load(\(String(decoding: data, as: UTF8.self)))")
         } catch { showEditorFailure("The document could not be sent to the editor: \(error.localizedDescription)") }
     }
     func loadMetadata() {
-        guard ready else { return }
+        guard ready, document != nil else { return }
         // Saving can give an untitled document its first path and image base.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.assets.root = (self.doc.fileURL ?? self.doc.recoveredOriginalURL)?.deletingLastPathComponent()
             let name = self.doc.editorName
-            self.sidebar.currentPath = self.doc.fileURL?.path ?? ""
+            self.host?.documentDidChange(self.doc)
             self.send("metadata", ["name": name, "path": self.doc.fileURL?.path ?? "", "modified": self.doc.isDocumentEdited])
         }
     }
@@ -765,8 +722,8 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             let message = body["message"] as? String ?? "An editor operation failed."
             if session.isLoaded { reportEditorError(message) }
             else { showEditorFailure(message) }
-        case "undo": undoDocument(nil)
-        case "redo": redoDocument(nil)
+        case "undo": doc.undoManager?.undo()
+        case "redo": doc.undoManager?.redo()
         case "new": app?.newDocument(nil)
         case "open": NSDocumentController.shared.openDocument(nil)
         case "openFolder": app?.openFolder(nil)
@@ -776,146 +733,28 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
         case "saveAs": doc.saveAs(nil)
         case "print": printDocument(nil)
         case "exportHTML": if let html = body["html"] as? String { exportHTML(html) }
-        case "toggleSidebar": toggleSidebar()
+        case "toggleSidebar": host?.toggleSidebar()
+        case "previousFile": host?.selectAdjacent(-1)
+        case "nextFile": host?.selectAdjacent(1)
         case "contextMenu": webView.documentMenuRequested = true
         case "outline":
-            let headings = (body["headings"] as? [[String: Any]] ?? []).compactMap { item -> HeadingEntry? in
+            let headings: [HeadingEntry] = (body["headings"] as? [[String: Any]] ?? []).compactMap { item -> HeadingEntry? in
                 guard let level = item["level"] as? Int, let text = item["text"] as? String, let pos = item["pos"] as? Int else { return nil }
                 return HeadingEntry(level: level, text: text, pos: pos)
             }
-            sidebar.setHeadings(headings)
+            self.headings = headings
+            if host?.current === document { host?.sidebar.setHeadings(headings) }
         case "openExternal":
             if let string = body["url"] as? String, let url = URL(string: string), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") { NSWorkspace.shared.open(url) }
         default: break
         }
     }
-    // NSWindowTabGroup documents `windows` as KVO compliant and in visual tab
-    // order. NSWindow.tabGroup has no such promise, so re-attach whenever this
-    // window has moved to another group. Reading tabGroup before the window is
-    // shown gives it a group of its own and stops it joining the current tabs.
-    override func showWindow(_ sender: Any?) {
-        super.showWindow(sender)
-        markShown()
-    }
-    // Restored windows are already in their tab group when restoration finishes.
-    func markShown() {
-        hasBeenShown = true
-        observeTabGroup()
-        NotificationCenter.default.post(name: .openFilesChanged, object: self)
-    }
-    private func observeTabGroup() {
-        guard hasBeenShown, let group = window?.tabGroup, group !== observedTabGroup else { return }
-        observedTabGroup = group
-        sidebar.state = SidebarStates.state(for: group, current: sidebar.state)
-        observeSidebarState()
-        tabObservation = group.observe(\.windows) { [weak self] _, _ in
-            NotificationCenter.default.post(name: .openFilesChanged, object: self)
-        }
-    }
-    var tabDocuments: [MarkdownDocument] {
-        guard let window else { return [] }
-        guard hasBeenShown else { return [doc] }
-        let open = NSDocumentController.shared.documents
-        // tabbedWindows is nil whenever the tab bar is hidden; the group is not.
-        return (window.tabGroup?.windows ?? [window]).compactMap { $0.windowController?.document as? MarkdownDocument }.filter { doc in open.contains { $0 === doc } }
-    }
-    private func tab(for id: String?) -> NSWindow? {
-        tabDocuments.first { $0.recoveryID.uuidString == id }?.editorController?.window
-    }
-    func selectTab(id: String?) { tab(for: id)?.makeKeyAndOrderFront(nil) }
-    // performClose keeps the standard unsaved-changes prompt, shown on its own tab.
-    func closeTab(id: String?) {
-        guard let tab = tab(for: id) else { return }
-        if (tab.windowController?.document as? NSDocument)?.isDocumentEdited == true { tab.makeKeyAndOrderFront(nil) }
-        tab.performClose(nil)
-    }
-    // The height the title bar and tab bar cover at the top of the editor, and
-    // whether the tab bar is showing the document's name.
-    func titlebarState() -> (inset: CGFloat, tabBar: Bool) {
-        guard let window else { return (0, false) }
-        // Reading tabGroup before the window is shown would give it a group of its own.
-        return (editorContainer.safeAreaInsets.top, hasBeenShown && window.tabGroup?.isTabBarVisible == true)
-    }
     private func sendTitlebar() {
-        let titlebar = titlebarState()
-        guard canSynchronize, sentTitlebar.map({ $0 != titlebar }) ?? true else { return }
-        sentTitlebar = titlebar
-        send("titlebar", ["inset": titlebar.inset, "tabBar": titlebar.tabBar])
+        let inset = view.safeAreaInsets.top
+        guard canSynchronize, inset != sentTitlebarInset else { return }
+        sentTitlebarInset = inset
+        send("titlebar", ["inset": inset])
     }
-    func sendOpenFiles() {
-        observeTabGroup()
-        sidebar.setOpenFiles(tabDocuments.map { tab in
-            OpenFileEntry(id: tab.recoveryID.uuidString, name: tab.editorName, path: tab.fileURL?.path ?? "", modified: tab.isDocumentEdited, current: tab === document)
-        })
-        sendTitlebar()
-    }
-    // MARK: Sidebar
-    private func connectSidebar() {
-        sidebar.onSelectOpenFile = { [weak self] id in self?.selectTab(id: id) }
-        sidebar.onCloseOpenFile = { [weak self] id in self?.closeTab(id: id) }
-        sidebar.onOpenPath = { [weak self] path in self?.openWorkspaceFile(path) }
-        sidebar.onNewFile = { [weak self] folder in
-            guard let self, let window = self.window else { return }
-            do { try self.app?.createWorkspaceFile(in: URL(fileURLWithPath: folder), asTabIn: window) }
-            catch { self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil) }
-        }
-        sidebar.onRename = { [weak self] path, name in
-            self?.app?.renameWorkspaceFile(URL(fileURLWithPath: path), to: name) { error in
-                guard let self, let error, let window = self.window else { return }
-                self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
-            }
-        }
-        sidebar.onReveal = { [weak self] pos in
-            guard let self else { return }
-            self.window?.makeFirstResponder(self.webView)
-            self.send("reveal", pos)
-        }
-        sidebar.onAction = { [weak self] action in
-            switch action {
-            case "new": self?.app?.newDocument(nil)
-            case "open": NSDocumentController.shared.openDocument(nil)
-            case "openFolder": self?.app?.openFolder(nil)
-            case "refreshFolder": self?.app?.refreshFolders()
-            case "toggleSidebar": self?.toggleSidebar()
-            default: break
-            }
-        }
-        collapseObservation = sidebarItem.observe(\.isCollapsed, options: [.new]) { [weak self] item, _ in
-            guard let self else { return }
-            self.send("sidebar", ["open": !item.isCollapsed])
-            if !self.applyingSidebarState { self.sidebar.state.collapsed = item.isCollapsed }
-        }
-        splitController.onResize = { [weak self] in
-            guard let self, !self.applyingSidebarState, !self.sidebarItem.isCollapsed, self.sidebarWidth > 0 else { return }
-            self.sidebar.state.width = self.sidebarWidth
-        }
-        sidebar.setFolder(app?.workspaceTree)
-        observeSidebarState()
-        applySidebarState(animated: false)
-    }
-    private func observeSidebarState() {
-        if let sidebarStateObserver { NotificationCenter.default.removeObserver(sidebarStateObserver) }
-        sidebarStateObserver = NotificationCenter.default.addObserver(forName: .sidebarStateChanged, object: sidebar.state, queue: .main) { [weak self] _ in
-            self?.applySidebarState(animated: self?.window?.isKeyWindow == true)
-        }
-        applySidebarState(animated: false)
-    }
-    // Tabs in the background follow the visible one without animating.
-    private func applySidebarState(animated: Bool) {
-        let state = sidebar.state
-        applyingSidebarState = true
-        defer { applyingSidebarState = false }
-        if sidebarItem.isCollapsed != state.collapsed {
-            if animated { sidebarItem.animator().isCollapsed = state.collapsed } else { sidebarItem.isCollapsed = state.collapsed }
-        }
-        if !state.collapsed, abs(sidebarWidth - state.width) > 0.5, splitController.splitView.arrangedSubviews.count > 1 {
-            splitController.splitView.setPosition(state.width, ofDividerAt: 0)
-        }
-    }
-    // The pane's width, which the divider position sets. The sidebar's own view
-    // can sit inset within it.
-    var sidebarWidth: CGFloat { splitController.splitView.arrangedSubviews.first?.frame.width ?? 0 }
-    func toggleSidebar() { sidebar.state.collapsed.toggle() }
     // Insert items first, then the Paragraph and Format menus' commands.
     func documentMenuItems() -> [NSMenuItem] {
         func format(_ title: String, _ kind: String) -> NSMenuItem {
@@ -939,13 +778,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
     @objc func formatFromMenu(_ sender: NSMenuItem) {
         guard let kind = sender.representedObject as? String else { return }
         send("format", kind)
-    }
-    func showOutline() { sidebar.state.collapsed = false; sidebar.state.mode = .outline }
-    // Workspace clicks may name only Markdown files inside the open folder.
-    func openWorkspaceFile(_ path: String) {
-        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
-        guard let app, let window, app.isInWorkspace(url), markdownExtensions.contains(url.pathExtension.lowercased()) else { return }
-        app.open([url], asTabsIn: window)
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.navigationType == .linkActivated {
@@ -988,8 +820,6 @@ final class EditorWindowController: NSWindowController, WKScriptMessageHandler, 
             operation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
         }
     }
-    @objc func undoDocument(_ sender: Any?) { doc.undoManager?.undo() }
-    @objc func redoDocument(_ sender: Any?) { doc.undoManager?.redo() }
 }
 
 class DocumentController: NSDocumentController {
@@ -1050,11 +880,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let recoveryStore: RecoveryStore
     let settings: Settings
     private var settingsWindow: SettingsWindowController?
-    private var openFilesRefreshScheduled = false
     private var launchFinished = false
     private var restorationFinished = false
     private var startupCompleted = false
-    var currentEditor: EditorWindowController? { NSApp.keyWindow?.windowController as? EditorWindowController }
+    private var restoringWindows = 0
+    private(set) var windows: [EditorWindowController] = []
+    // Only windows still open count; AppKit can keep listing one after it closes.
+    var currentWindow: EditorWindowController? {
+        let front = (NSApp.keyWindow?.windowController ?? NSApp.mainWindow?.windowController) as? EditorWindowController
+        return front.flatMap { host in windows.contains { $0 === host } ? host : nil }
+    }
+    var currentEditor: DocumentEditor? { currentWindow?.currentEditor }
 
     init(controller: DocumentController? = nil, recoveryStore: RecoveryStore = .shared, settings: Settings = Settings()) {
         self.controller = controller
@@ -1062,11 +898,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.settings = settings
         super.init()
         controller?.app = self
-        NotificationCenter.default.addObserver(self, selector: #selector(openFilesChanged(_:)), name: .openFilesChanged, object: nil)
     }
     func applicationWillFinishLaunching(_ notification: Notification) {
         if controller == nil { controller = DocumentController() }
         controller.app = self
+        // A window switches between its documents, so macOS's window tabs are not used.
+        NSWindow.allowsAutomaticWindowTabbing = false
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidFinishRestoringWindows(_:)), name: NSApplication.didFinishRestoringWindowsNotification, object: NSApp)
         buildMenu()
         applySettings()
@@ -1080,18 +917,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         finishStartupIfReady()
     }
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
-    func showRestoredEditors() {
-        for case let doc as MarkdownDocument in controller.documents where doc.wasRestored { doc.editorController?.markShown() }
-    }
     @objc func applicationDidFinishRestoringWindows(_ notification: Notification) {
-        showRestoredEditors()
         restorationFinished = true
         finishStartupIfReady()
     }
     private func finishStartupIfReady() {
         // Restoration can finish after didFinishLaunching. Wait for both it
         // and launch-time file opens before deciding whether a welcome is needed.
-        guard launchFinished, restorationFinished, !controller.isOpening, !startupCompleted else { return }
+        guard launchFinished, restorationFinished, restoringWindows == 0, !controller.isOpening, !startupCompleted else { return }
         startupCompleted = true
         do {
             let failures = try recoverDocuments()
@@ -1149,21 +982,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func documentOpensFinished() { finishStartupIfReady() }
-    // Finder, Dock, and File > Open go straight to the document controller, and
-    // editor windows prefer tabs, so those join the frontmost window. Drops and
-    // workspace clicks name their window, which may not be frontmost.
-    func open(_ urls: [URL], asTabsIn window: NSWindow, opened: @escaping (NSDocument) -> Void = { _ in }) {
+    // MARK: Windows
+
+    func makeWindow() -> EditorWindowController {
+        let host = EditorWindowController()
+        if let front = currentWindow?.window ?? windows.last?.window, let window = host.window {
+            window.setFrame(front.frame, display: false)
+            window.setFrameTopLeftPoint(window.cascadeTopLeft(from: NSPoint(x: front.frame.minX, y: front.frame.maxY)))
+        }
+        windows.append(host)
+        return host
+    }
+    func windowDidClose(_ host: EditorWindowController) { windows.removeAll { $0 === host } }
+    // Finder, Dock, File › Open, and new documents join the frontmost window.
+    func windowForNewDocuments() -> EditorWindowController {
+        let front = NSApp.orderedWindows.lazy.compactMap { $0.windowController as? EditorWindowController }.first { host in self.windows.contains { $0 === host } }
+        return currentWindow ?? front ?? windows.last ?? makeWindow()
+    }
+    @objc func newWindow(_ sender: Any?) {
+        do {
+            let doc = try controller.makeUntitledDocument(ofType: markdownType)
+            controller.addDocument(doc)
+            guard let markdown = doc as? MarkdownDocument else { return }
+            makeWindow().add(markdown)
+            markdown.showWindows()
+        } catch { controller.presentError(error) }
+    }
+    // Drops, workspace clicks, and Quick Open name their window. A document already
+    // open elsewhere is shown where it is.
+    func open(_ urls: [URL], in host: EditorWindowController, opened: @escaping (NSDocument) -> Void = { _ in }) {
         for url in urls {
             controller.openDocument(withContentsOf: url, display: false) { [weak self] document, alreadyOpen, error in
                 if let error { self?.controller.presentError(error); return }
-                guard let document else { return }
-                if document.windowControllers.isEmpty { document.makeWindowControllers() }
-                if !alreadyOpen, let tab = document.windowControllers.first?.window, tab !== window {
-                    window.tabGroup?.addWindow(tab)
-                }
+                guard let document = document as? MarkdownDocument else { return }
+                if !(alreadyOpen && document.editor?.host != nil) { host.add(document) }
                 document.showWindows()
                 opened(document)
             }
+        }
+    }
+    @objc func previousFile(_ sender: Any?) { currentWindow?.selectAdjacent(-1) }
+    @objc func nextFile(_ sender: Any?) { currentWindow?.selectAdjacent(1) }
+    // Restoration reopens each window's documents before deciding whether a welcome is needed.
+    func beginRestoring() { restoringWindows += 1 }
+    func endRestoring() { restoringWindows -= 1; finishStartupIfReady() }
+    func restoreDocument(_ entry: [String: Any], completion: @escaping (MarkdownDocument?) -> Void) {
+        func finish(_ document: NSDocument?) {
+            guard let doc = document as? MarkdownDocument else { completion(nil); return }
+            if let id = (entry["recoveryID"] as? String).flatMap(UUID.init(uuidString:)) { doc.recoveryID = id }
+            if let name = entry["recoveredName"] as? String { doc.recoveredName = name; doc.displayName = name }
+            if let original = entry["recoveredOriginalPath"] as? String { doc.recoveredOriginalURL = URL(fileURLWithPath: original) }
+            completion(doc)
+        }
+        if let path = entry["path"] as? String {
+            controller.openDocument(withContentsOf: URL(fileURLWithPath: path), display: false) { document, _, _ in finish(document) }
+        } else if let autosaved = entry["autosaved"] as? String {
+            controller.reopenDocument(for: nil, withContentsOf: URL(fileURLWithPath: autosaved), display: false) { document, _, _ in finish(document) }
+        } else {
+            // A clean untitled document; a welcome comes back with its text.
+            guard let doc = try? controller.makeUntitledDocument(ofType: markdownType) as? MarkdownDocument else { completion(nil); return }
+            if entry["welcome"] as? Bool == true, let welcome = MarkdownDocument.welcomeText() { doc.text = welcome; doc.isWelcome = true }
+            controller.addDocument(doc)
+            finish(doc)
         }
     }
     func isInWorkspace(_ url: URL) -> Bool {
@@ -1172,13 +1052,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return path == root || path.hasPrefix(root + "/")
     }
     // An empty Markdown file with an unused name, opened as a tab and ready to rename.
-    func createWorkspaceFile(in folder: URL, asTabIn window: NSWindow) throws {
+    func createWorkspaceFile(in folder: URL, in host: EditorWindowController) throws {
         guard isInWorkspace(folder) else { throw CocoaError(.fileWriteNoPermission) }
         var url = folder.appendingPathComponent("Untitled.md"), number = 2
         while FileManager.default.fileExists(atPath: url.path) { url = folder.appendingPathComponent("Untitled \(number).md"); number += 1 }
         try Data().write(to: url, options: .withoutOverwriting)
         refreshFolders { [weak self] in
-            self?.open([url], asTabsIn: window) { document in (document as? MarkdownDocument)?.editorController?.sidebar.beginRename(path: url.path) }
+            self?.open([url], in: host) { document in (document as? MarkdownDocument)?.editor?.host?.sidebar.beginRename(path: url.path) }
         }
     }
     // Keeps a Markdown extension, adding the file's own when the name has none. A file
@@ -1200,7 +1080,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let doc = controller.documents.first(where: { $0.fileURL?.standardizedFileURL == url.standardizedFileURL }) as? MarkdownDocument {
             doc.move(to: destination) { error in
-                if error == nil { doc.editorController?.loadMetadata() }
+                if error == nil { doc.editor?.loadMetadata() }
                 finish(error)
             }
             return
@@ -1212,16 +1092,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             catch { moveError = error }
         }
         finish(coordinationError ?? moveError)
-    }
-    @objc private func openFilesChanged(_ notification: Notification) { scheduleOpenFilesRefresh() }
-    func scheduleOpenFilesRefresh() {
-        guard !openFilesRefreshScheduled else { return }
-        openFilesRefreshScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.openFilesRefreshScheduled = false
-            for doc in self.controller.documents { (doc as? MarkdownDocument)?.editorController?.sendOpenFiles() }
-        }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard startupCompleted else { return true }
@@ -1276,7 +1146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 defer { completion() }
                 guard let self, scan == self.workspaceScan, tree != self.workspaceTree else { return }
                 self.workspaceTree = tree
-                for doc in self.controller.documents { (doc as? MarkdownDocument)?.editorController?.sidebar.setFolder(tree) }
+                for host in self.windows { host.sidebar.setFolder(tree) }
             }
         }
     }
@@ -1286,24 +1156,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         currentEditor?.send(parts[0], parts.count > 1 ? parts[1] : nil)
     }
     @objc func exportHTML(_ sender: Any?) { currentEditor?.send("exportHTML") }
-    @objc func toggleSidebar(_ sender: Any?) { currentEditor?.toggleSidebar() }
-    @objc func showQuickOpen(_ sender: Any?) { if let currentEditor { showQuickOpen(for: currentEditor) } }
-    func showQuickOpen(for editor: EditorWindowController) {
-        guard let window = editor.window else { return }
+    @objc func toggleSidebar(_ sender: Any?) { currentWindow?.toggleSidebar() }
+    @objc func showQuickOpen(_ sender: Any?) { if let currentWindow { showQuickOpen(for: currentWindow) } }
+    func showQuickOpen(for host: EditorWindowController) {
+        guard let window = host.window else { return }
         quickOpen?.close()
-        let picker = QuickOpenController(items: quickOpenItems(for: editor)) { [weak self, weak window] item in
-            guard let window else { return }
+        let picker = QuickOpenController(items: quickOpenItems(for: host)) { [weak self, weak host] item in
+            guard let host else { return }
             switch item.target {
             case let .document(doc): doc.showWindows()
-            case let .file(url): self?.open([url], asTabsIn: window)
+            case let .file(url): self?.open([url], in: host)
             }
         }
         picker.onClose = { [weak self, weak picker] in if self?.quickOpen === picker { self?.quickOpen = nil } }
         quickOpen = picker
         picker.show(over: window)
     }
-    // This window's tabs, then other open documents, recent files, and the workspace's files.
-    func quickOpenItems(for editor: EditorWindowController) -> [QuickOpenItem] {
+    // This window's documents, then other open documents, recent files, and the workspace's files.
+    func quickOpenItems(for host: EditorWindowController) -> [QuickOpenItem] {
         var items: [QuickOpenItem] = [], seen = Set<String>()
         func folder(of url: URL) -> String {
             let directory = url.deletingLastPathComponent().path
@@ -1316,9 +1186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let path = url?.standardizedFileURL.path { guard seen.insert(path).inserted else { return } }
             items.append(QuickOpenItem(name: name, detail: url.map(folder(of:)) ?? "Open, not saved", target: target))
         }
-        let tabs = editor.tabDocuments
-        let others = controller.documents.compactMap { $0 as? MarkdownDocument }.filter { doc in !tabs.contains { $0 === doc } }
-        for doc in tabs + others { add(doc.editorName, doc.fileURL, .document(doc)) }
+        let here = host.documents
+        let others = controller.documents.compactMap { $0 as? MarkdownDocument }.filter { doc in !here.contains { $0 === doc } }
+        for doc in here + others { add(doc.editorName, doc.fileURL, .document(doc)) }
         for url in controller.recentDocumentURLs where FileManager.default.fileExists(atPath: url.path) { add(url.lastPathComponent, url, .file(url)) }
         func files(_ entries: [FolderEntry]) {
             for entry in entries {
@@ -1333,13 +1203,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let text = NSPasteboard.general.string(forType: .string) else { return }
         currentEditor?.send("pastePlain", text)
     }
-    @objc func showOutline(_ sender: Any?) { currentEditor?.showOutline() }
+    @objc func showOutline(_ sender: Any?) { currentWindow?.showOutline() }
     @objc func zoomIn(_ sender: Any?) { setTextZoom(settings.zoomedIn()) }
     @objc func zoomOut(_ sender: Any?) { setTextZoom(settings.zoomedOut()) }
     @objc func actualSize(_ sender: Any?) { setTextZoom(1) }
     func setTextZoom(_ zoom: Double) {
         settings.textZoom = zoom
-        for doc in controller.documents { (doc as? MarkdownDocument)?.editorController?.send("textZoom", zoom) }
+        for doc in controller.documents { (doc as? MarkdownDocument)?.editor?.send("textZoom", zoom) }
         currentEditor?.send("toast", "Text size \(Int((zoom * 100).rounded()))%")
     }
     @objc func showSettings(_ sender: Any?) {
@@ -1392,12 +1262,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         app.addItem(.separator()); item(app, "Quit Margin", #selector(NSApplication.terminate(_:)), "q")
         let file = menu("File")
         item(file, "New", #selector(newDocument(_:)), "n", target: self)
+        item(file, "New Window", #selector(newWindow(_:)), "n", modifiers: [.command, .shift], target: self)
         item(file, "Open…", #selector(NSDocumentController.openDocument(_:)), "o", target: controller)
         item(file, "Open Folder…", #selector(openFolder(_:)), "o", modifiers: [.command, .shift], target: self)
         item(file, "Quick Open…", #selector(showQuickOpen(_:)), "p", modifiers: [.command, .option], target: self)
         let recent = NSMenu(title: "Open Recent"); let recentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""); recentItem.submenu = recent; file.addItem(recentItem)
         recent.delegate = self
-        file.addItem(.separator()); item(file, "Close", #selector(NSWindow.performClose(_:)), "w")
+        file.addItem(.separator()); item(file, "Close", #selector(EditorWindowController.closeDocument(_:)), "w")
+        item(file, "Close Window", #selector(NSWindow.performClose(_:)), "w", modifiers: [.command, .shift])
         item(file, "Save", #selector(NSDocument.save(_:)), "s")
         item(file, "Save As…", #selector(NSDocument.saveAs(_:)), "s", modifiers: [.command, .shift])
         item(file, "Revert to Saved…", #selector(NSDocument.revertToSaved(_:)))
@@ -1420,7 +1292,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // ⌘= also zooms in, as in browsers, without a second visible item.
         item(view, "Zoom In", #selector(zoomIn(_:)), "=", target: self); view.items.last?.isHidden = true; view.items.last?.allowsKeyEquivalentWhenHidden = true
         view.addItem(.separator()); command(view, "Typewriter Mode", "typewriter"); view.addItem(.separator()); item(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", modifiers: [.command, .control])
-        let window = menu("Window"); item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"); item(window, "Zoom", #selector(NSWindow.performZoom(_:))); window.addItem(.separator()); item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:))); NSApp?.windowsMenu = window
+        // ⌘⇧[ and ⌘⇧] switch files, as they switch tabs elsewhere in macOS. AppKit matches
+        // the Shift-[ key as "{".
+        let window = menu("Window"); item(window, "Previous File", #selector(previousFile(_:)), "{", target: self); item(window, "Next File", #selector(nextFile(_:)), "}", target: self)
+        window.addItem(.separator()); item(window, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"); item(window, "Zoom", #selector(NSWindow.performZoom(_:))); window.addItem(.separator()); item(window, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:))); NSApp?.windowsMenu = window
         return bar
     }
 }

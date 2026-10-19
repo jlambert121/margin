@@ -162,15 +162,6 @@ body.sidebar-open #toggle-sidebar,body.sidebar-open .toolbar-left .divider {
   display:none
 }
 
-/* The tab already shows the name. */
-body.tab-bar #document-name,body.tab-bar .toolbar-left .divider {
-  display:none
-}
-
-body.tab-bar #modified-dot {
-  margin-left:0
-}
-
 #source-button {
   font-size:13px;
   font-family:ui-monospace,monospace
