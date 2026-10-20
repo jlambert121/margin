@@ -339,14 +339,27 @@ body.sidebar-open #toggle-sidebar,body.sidebar-open .toolbar-left .divider {
   vertical-align:middle
 }
 
+/* CodeMirror draws the selection at z-index -2, under the line. A fill on the
+   line covers it, so the card sits further back and the glyphs stay on top. */
 #editor .cm-md-codeblock {
-  background:var(--code);
+  position:relative;
+  background:none;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   font-size:calc(13px * var(--text-zoom));
   line-height:1.7;
   padding:0 22px;
   border-left:1px solid var(--line);
   border-right:1px solid var(--line)
+}
+
+#editor .cm-md-codeblock::before {
+  content:"";
+  position:absolute;
+  z-index:-10;
+  inset:-1px;
+  background:var(--code);
+  border-radius:inherit;
+  pointer-events:none
 }
 
 #editor .cm-md-codeblock-first {
