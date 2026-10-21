@@ -24,6 +24,18 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var applyingSidebarState = false
     private var closingAll = false
     private var pendingClose: ((Bool) -> Void)?
+    // The folder this window's sidebar lists, and its Markdown files as of the last scan.
+    var workspace: URL? {
+        didSet {
+            guard workspace != oldValue else { return }
+            workspaceTree = nil; workspaceScan += 1
+            sidebar.setFolder(nil)
+            refreshFolder()
+            window?.invalidateRestorableState()
+        }
+    }
+    private(set) var workspaceTree: FolderEntry?
+    private var workspaceScan = 0
     private var app: AppDelegate? { (NSDocumentController.shared as? DocumentController)?.app }
 
     init() {
@@ -195,7 +207,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             catch { self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil) }
         }
         sidebar.onRename = { [weak self] path, name in
-            self?.app?.renameWorkspaceFile(URL(fileURLWithPath: path), to: name) { error in
+            guard let self else { return }
+            self.app?.renameWorkspaceFile(URL(fileURLWithPath: path), to: name, in: self) { [weak self] error in
                 guard let self, let error, let window = self.window else { return }
                 self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
             }
@@ -210,7 +223,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             case "new": self?.app?.newDocument(nil)
             case "open": NSDocumentController.shared.openDocument(nil)
             case "openFolder": self?.app?.openFolder(nil)
-            case "refreshFolder": self?.app?.refreshFolders()
+            case "refreshFolder": self?.refreshFolder()
             case "toggleSidebar": self?.toggleSidebar()
             default: break
             }
@@ -224,7 +237,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             guard let self, !self.applyingSidebarState, !self.sidebarItem.isCollapsed, self.sidebarWidth > 0 else { return }
             self.sidebar.state.width = self.sidebarWidth
         }
-        sidebar.setFolder(app?.workspaceTree)
         sidebarStateObserver = NotificationCenter.default.addObserver(forName: .sidebarStateChanged, object: sidebar.state, queue: .main) { [weak self] _ in
             self?.applySidebarState(animated: self?.window?.isKeyWindow == true)
         }
@@ -249,13 +261,33 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     // Workspace clicks may name only Markdown files inside the open folder.
     func openWorkspaceFile(_ path: String) {
         let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
-        guard let app, app.isInWorkspace(url), markdownExtensions.contains(url.pathExtension.lowercased()) else { return }
+        guard let app, isInWorkspace(url), markdownExtensions.contains(url.pathExtension.lowercased()) else { return }
         app.open([url], in: self)
+    }
+    func isInWorkspace(_ url: URL) -> Bool {
+        guard let workspace else { return false }
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path, root = workspace.standardizedFileURL.resolvingSymlinksInPath().path
+        return path == root || path.hasPrefix(root + "/")
+    }
+    // Scans off the main thread; only the newest scan's result is kept.
+    func refreshFolder(completion: @escaping () -> Void = {}) {
+        guard let workspace else { completion(); return }
+        workspaceScan += 1
+        let scan = workspaceScan
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let tree = AppDelegate.scanFolder(workspace)
+            DispatchQueue.main.async {
+                defer { completion() }
+                guard let self, scan == self.workspaceScan, tree != self.workspaceTree else { return }
+                self.workspaceTree = tree
+                self.sidebar.setFolder(tree)
+            }
+        }
     }
 
     // MARK: Restoration
 
-    // Each document by its file, or by its autosaved copy when it was never saved.
+    // Each document by its file, or by its autosaved copy when it was never saved, and the open folder.
     func window(_ window: NSWindow, willEncodeRestorableState state: NSCoder) {
         let entries: [[String: Any]] = documents.compactMap { doc in
             var entry: [String: Any] = ["recoveryID": doc.recoveryID.uuidString, "welcome": doc.isWelcome]
@@ -268,11 +300,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         }
         state.encode(entries, forKey: "Margin.documents")
         state.encode(current.flatMap { current in documents.firstIndex { $0 === current } } ?? 0, forKey: "Margin.current")
+        if let workspace { state.encode(workspace.path as NSString, forKey: "Margin.workspace") }
     }
     func restore(from state: NSCoder, completion: @escaping () -> Void) {
         let allowed = [NSArray.self, NSDictionary.self, NSString.self, NSNumber.self]
         let entries = state.decodeObject(of: allowed, forKey: "Margin.documents") as? [[String: Any]] ?? []
         let selected = state.decodeInteger(forKey: "Margin.current")
+        var isFolder: ObjCBool = false
+        if let path = state.decodeObject(of: NSString.self, forKey: "Margin.workspace") as String?,
+           FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), isFolder.boolValue { workspace = URL(fileURLWithPath: path) }
         guard let app, !entries.isEmpty else { completion(); return }
         var restored = [MarkdownDocument?](repeating: nil, count: entries.count)
         var remaining = entries.count

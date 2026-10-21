@@ -398,7 +398,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             for doc in host.documents { doc.close() }
             try expect(!window.isVisible && !delegate.windows.contains { $0 === host }, "Closing every document left the window open")
         }
-        test("A window restores its documents in order, with the current one and the welcome's text") {
+        test("A window restores its documents in order, with the current one, the welcome's text, and its folder") {
             guard let welcomeText = MarkdownDocument.welcomeText() else { throw CocoaError(.fileReadNoSuchFile) }
             var fileDoc: MarkdownDocument?
             controller.openDocument(withContentsOf: first, display: true) { doc, _, _ in fileDoc = doc as? MarkdownDocument }
@@ -410,6 +410,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             for doc in [welcome, blank] { controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows() }
             guard let host = fileDoc?.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
             host.select(welcome)
+            host.workspace = root
             let order = host.documents.map(\.editorName), ids = host.documents.map(\.recoveryID)
             let archiver = NSKeyedArchiver(requiringSecureCoding: true)
             host.window(window, willEncodeRestorableState: archiver); archiver.finishEncoding()
@@ -424,6 +425,8 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(restored.documents.map(\.editorName) == order && restored.documents.map(\.recoveryID) == ids, "Restored \(restored.documents.map(\.editorName)), expected \(order)")
             try expect(restored.current?.isWelcome == true && restored.current?.text == welcomeText, "The welcome was not current, or came back blank")
             try expect(restored.documents.first?.fileURL?.resolvingSymlinksInPath() == first.resolvingSymlinksInPath(), "The file was not reopened")
+            try expect(restored.workspace?.standardizedFileURL == root.standardizedFileURL, "The window's folder was not reopened")
+            try waitUntil { restored.sidebar.visibleTreeRows.contains("A real file.md") }
         }
         test("The editor fills the window under the title bar, has the keyboard, and the drag strip covers the title bar") {
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
@@ -473,21 +476,40 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(other.sidebar.state !== host.sidebar.state && other.sidebar.state.mode == .files && Int(other.sidebar.state.width) == 300, "The new window's sidebar is shared or did not start from the last width")
             try expect(host.documents.count == 2 && other.documents.count == 1, "New Window did not keep its own Open Files")
         }
+        test("A new window starts without a folder, and each window keeps its own") {
+            let elsewhere = FileManager.default.temporaryDirectory.appendingPathComponent("margin-integration-elsewhere-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: elsewhere) }
+            try "# Elsewhere\n".write(to: elsewhere.appendingPathComponent("Elsewhere.md"), atomically: true, encoding: .utf8)
+            let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
+            defer { for doc in controller.documents { doc.close() } }
+            guard let host = a.editor?.host else { throw CocoaError(.fileReadUnknown) }
+            host.workspace = root
+            try waitUntil { host.sidebar.visibleTreeRows.contains("A real file.md") }
+            delegate.newWindow(nil)
+            guard let other = delegate.windows.last, other !== host, let newDoc = other.current else { throw CocoaError(.fileReadUnknown) }
+            newDoc.recoveryStore = recoveryStore
+            try expect(other.workspace == nil && other.workspaceTree == nil && !other.sidebar.visibleTreeRows.contains("A real file.md"), "The new window showed another window's folder: \(other.sidebar.visibleTreeRows)")
+            other.workspace = elsewhere
+            try waitUntil { other.sidebar.visibleTreeRows == ["Elsewhere.md"] }
+            try expect(host.workspace == root && host.sidebar.visibleTreeRows.contains("A real file.md"), "Opening a folder in one window changed another's")
+            try expect(delegate.quickOpenItems(for: other).contains { $0.name == "Elsewhere.md" } && !delegate.quickOpenItems(for: host).contains { $0.name == "Elsewhere.md" }, "Quick open listed another window's folder")
+            var refreshed = false
+            delegate.refreshFolders { refreshed = true }
+            try waitUntil { refreshed }
+            try expect(other.sidebar.visibleTreeRows == ["Elsewhere.md"] && host.sidebar.visibleTreeRows.contains("A real file.md"), "Refreshing mixed the windows' folders")
+        }
         test("The sidebar lists, filters, and opens workspace files, and remembers folders opened across tabs") {
             let nested = root.appendingPathComponent("Nested", isDirectory: true)
             try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
             try "# Deep\n".write(to: nested.appendingPathComponent("Deep note.md"), atomically: true, encoding: .utf8)
             defer { try? FileManager.default.removeItem(at: nested) }
-            let saved = delegate.workspace
-            delegate.workspace = root
-            defer { delegate.workspace = saved }
-            var scanned = false
-            delegate.refreshFolders { scanned = true }
-            try waitUntil { scanned }
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
             defer { for doc in controller.documents { doc.close() } }
             guard let editor = a.editor, let host = editor.host else { throw CocoaError(.fileReadUnknown) }
+            host.workspace = root
             try waitUntil { editor.canSynchronize }
             let sidebar = host.sidebar
             try waitUntil { sidebar.visibleTreeRows.contains("Nested/") }
@@ -528,16 +550,14 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { editor.webView.evaluateJavaScript("app.view.state.selection.main.head") { result, _ in head = result as? Int ?? -1 }; return head == host.sidebar.headings[1].pos }
         }
         test("Quick open lists the window's documents and workspace files, opens a file into the window, and switches to an open one") {
-            let saved = delegate.workspace
-            delegate.workspace = root
-            defer { delegate.workspace = saved }
-            var scanned = false
-            delegate.refreshFolders { scanned = true }
-            try waitUntil { scanned }
             let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
             defer { for doc in controller.documents { doc.close() } }
             guard let host = a.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+            host.workspace = root
+            var scanned = false
+            host.refreshFolder { scanned = true }
+            try waitUntil { scanned }
             let names = delegate.quickOpenItems(for: host).map(\.name)
             try expect(names.first == "Untitled.md" && names.contains("A real file.md") && names.contains("Another.markdown") && Set(names).count == names.count, "Unexpected candidates: \(names)")
             delegate.showQuickOpen(for: host)
@@ -560,15 +580,17 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             defer { try? FileManager.default.removeItem(at: folder) }
             let plain = folder.appendingPathComponent("plain.md"), taken = folder.appendingPathComponent("taken.md"), open = folder.appendingPathComponent("open.md")
             for url in [plain, taken, open] { try "# \(url.lastPathComponent)\n".write(to: url, atomically: true, encoding: .utf8) }
-            let saved = delegate.workspace
-            delegate.workspace = root
-            defer { delegate.workspace = saved }
+            let holder = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+            holder.recoveryStore = recoveryStore; controller.addDocument(holder); holder.makeWindowControllers(); holder.showWindows()
+            defer { for doc in controller.documents { doc.close() } }
+            guard let host = holder.editor?.host else { throw CocoaError(.fileReadUnknown) }
+            host.workspace = root
             var scanned = false
-            delegate.refreshFolders { scanned = true }
+            host.refreshFolder { scanned = true }
             try waitUntil { scanned }
             @MainActor func rename(_ url: URL, _ name: String) throws -> Error? {
                 var result: Error??
-                delegate.renameWorkspaceFile(url, to: name) { result = .some($0) }
+                delegate.renameWorkspaceFile(url, to: name, in: host) { result = .some($0) }
                 try waitUntil { result != nil }
                 return result!
             }
@@ -581,7 +603,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             controller.openDocument(withContentsOf: open, display: true) { document, _, _ in opened = document as? MarkdownDocument }
             try waitUntil { opened?.editor?.canSynchronize == true }
             guard let doc = opened, let editor = doc.editor, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
-            defer { for doc in controller.documents { doc.close() } }
+            try expect(editor.host === host, "The opened file did not join the window with the folder")
             doc.edited("# Unsaved edits\n")
             try waitUntil { doc.isDocumentEdited }
             let moved = folder.appendingPathComponent("moved.md")
@@ -591,7 +613,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { editor.webView.evaluateJavaScript("document.querySelector('#document-name').textContent") { result, _ in name = result as? String ?? "" }; return name == "moved.md" }
 
             // The sidebar names files by the paths in the scanned tree.
-            guard let treeFolder = delegate.workspaceTree?.children?.first(where: { $0.name == "Rename tests" })?.path else { throw CocoaError(.fileReadUnknown) }
+            guard let treeFolder = host.workspaceTree?.children?.first(where: { $0.name == "Rename tests" })?.path else { throw CocoaError(.fileReadUnknown) }
             let treeMoved = treeFolder + "/moved.md"
             guard let sidebar = editor.host?.sidebar else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { sidebar.visibleTreeRows.contains { $0.hasSuffix("moved.md") } }

@@ -871,10 +871,6 @@ class DocumentController: NSDocumentController {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    var workspace: URL?
-    // The workspace's Markdown files as of the last scan, shared by every sidebar.
-    private(set) var workspaceTree: FolderEntry?
-    private var workspaceScan = 0
     private(set) var quickOpen: QuickOpenController?
     var controller: DocumentController!
     let recoveryStore: RecoveryStore
@@ -907,7 +903,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(applicationDidFinishRestoringWindows(_:)), name: NSApplication.didFinishRestoringWindowsNotification, object: NSApp)
         buildMenu()
         applySettings()
-        if let path = UserDefaults.standard.string(forKey: "workspace"), FileManager.default.fileExists(atPath: path) { workspace = URL(fileURLWithPath: path) }
     }
     // Files added in other applications show up when Margin comes back to the front.
     func applicationDidBecomeActive(_ notification: Notification) { refreshFolders() }
@@ -994,19 +989,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return host
     }
     func windowDidClose(_ host: EditorWindowController) { windows.removeAll { $0 === host } }
-    // Finder, Dock, File › Open, and new documents join the frontmost window.
-    func windowForNewDocuments() -> EditorWindowController {
+    private var frontWindow: EditorWindowController? {
         let front = NSApp.orderedWindows.lazy.compactMap { $0.windowController as? EditorWindowController }.first { host in self.windows.contains { $0 === host } }
-        return currentWindow ?? front ?? windows.last ?? makeWindow()
+        return currentWindow ?? front ?? windows.last
     }
-    @objc func newWindow(_ sender: Any?) {
+    // Finder, Dock, File › Open, and new documents join the frontmost window.
+    func windowForNewDocuments() -> EditorWindowController { frontWindow ?? makeWindow() }
+    @objc func newWindow(_ sender: Any?) { makeWindowWithUntitledDocument() }
+    @discardableResult private func makeWindowWithUntitledDocument() -> EditorWindowController? {
         do {
             let doc = try controller.makeUntitledDocument(ofType: markdownType)
             controller.addDocument(doc)
-            guard let markdown = doc as? MarkdownDocument else { return }
-            makeWindow().add(markdown)
+            guard let markdown = doc as? MarkdownDocument else { return nil }
+            let host = makeWindow()
+            host.add(markdown)
             markdown.showWindows()
-        } catch { controller.presentError(error) }
+            return host
+        } catch { controller.presentError(error); return nil }
     }
     // Drops, workspace clicks, and Quick Open name their window. A document already
     // open elsewhere is shown where it is.
@@ -1046,27 +1045,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             finish(doc)
         }
     }
-    func isInWorkspace(_ url: URL) -> Bool {
-        guard let workspace else { return false }
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path, root = workspace.standardizedFileURL.resolvingSymlinksInPath().path
-        return path == root || path.hasPrefix(root + "/")
-    }
     // An empty Markdown file with an unused name, opened as a tab and ready to rename.
     func createWorkspaceFile(in folder: URL, in host: EditorWindowController) throws {
-        guard isInWorkspace(folder) else { throw CocoaError(.fileWriteNoPermission) }
+        guard host.isInWorkspace(folder) else { throw CocoaError(.fileWriteNoPermission) }
         var url = folder.appendingPathComponent("Untitled.md"), number = 2
         while FileManager.default.fileExists(atPath: url.path) { url = folder.appendingPathComponent("Untitled \(number).md"); number += 1 }
         try Data().write(to: url, options: .withoutOverwriting)
-        refreshFolders { [weak self] in
+        host.refreshFolder { [weak self] in
             self?.open([url], in: host) { document in (document as? MarkdownDocument)?.editor?.host?.sidebar.beginRename(path: url.path) }
         }
     }
     // Keeps a Markdown extension, adding the file's own when the name has none. A file
     // open in a tab moves with its document, which keeps the tab and any unsaved edits.
-    func renameWorkspaceFile(_ url: URL, to name: String, completion: @escaping (Error?) -> Void) {
+    func renameWorkspaceFile(_ url: URL, to name: String, in host: EditorWindowController, completion: @escaping (Error?) -> Void) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         func refused(_ reason: String) { completion(NSError(domain: "Margin.Rename", code: 1, userInfo: [NSLocalizedDescriptionKey: "“\(trimmed)” can’t be used as a file name.", NSLocalizedRecoverySuggestionErrorKey: reason])) }
-        guard isInWorkspace(url) else { completion(CocoaError(.fileWriteNoPermission)); return }
+        guard host.isInWorkspace(url) else { completion(CocoaError(.fileWriteNoPermission)); return }
         guard !trimmed.isEmpty, !trimmed.contains("/"), !trimmed.contains(":"), !trimmed.hasPrefix(".") else { refused("Use a name without “/” or “:” that doesn’t start with a period."); return }
         let fileName = markdownExtensions.contains((trimmed as NSString).pathExtension.lowercased()) ? trimmed : trimmed + "." + (url.pathExtension.isEmpty ? "md" : url.pathExtension)
         let destination = url.deletingLastPathComponent().appendingPathComponent(fileName)
@@ -1105,14 +1099,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do { try controller.openUntitledDocumentAndDisplay(true) }
         catch { controller.presentError(error) }
     }
+    // The folder replaces the one in the window it was chosen from, or opens in a new
+    // window when none is open. Other windows keep their folders.
     @objc func openFolder(_ sender: Any?) {
+        let target = frontWindow
         let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
         panel.prompt = "Open Folder"; panel.message = "Choose a folder of Markdown files."
         panel.begin { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
-            self.workspace = url; UserDefaults.standard.set(url.path, forKey: "workspace")
-            if self.controller.documents.isEmpty { self.newDocument(nil) }
-            self.refreshFolders()
+            let host = target.flatMap { target in self.windows.contains { $0 === target } ? target : nil } ?? self.makeWindowWithUntitledDocument()
+            host?.workspace = url
         }
     }
     static func scanFolder(_ workspace: URL) -> FolderEntry {
@@ -1135,20 +1131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         return FolderEntry(name: workspace.lastPathComponent, path: workspace.path, children: entries(workspace, depth: 0))
     }
-    // Scans off the main thread; only the newest scan's result is kept.
     func refreshFolders(completion: @escaping () -> Void = {}) {
-        guard let workspace else { completion(); return }
-        workspaceScan += 1
-        let scan = workspaceScan
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let tree = Self.scanFolder(workspace)
-            DispatchQueue.main.async {
-                defer { completion() }
-                guard let self, scan == self.workspaceScan, tree != self.workspaceTree else { return }
-                self.workspaceTree = tree
-                for host in self.windows { host.sidebar.setFolder(tree) }
-            }
-        }
+        let group = DispatchGroup()
+        for host in windows { group.enter(); host.refreshFolder { group.leave() } }
+        group.notify(queue: .main, execute: completion)
     }
     @objc func webCommand(_ sender: NSMenuItem) {
         guard let action = sender.representedObject as? String else { return }
@@ -1172,12 +1158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quickOpen = picker
         picker.show(over: window)
     }
-    // This window's documents, then other open documents, recent files, and the workspace's files.
+    // This window's documents, then other open documents, recent files, and the files in this window's folder.
     func quickOpenItems(for host: EditorWindowController) -> [QuickOpenItem] {
         var items: [QuickOpenItem] = [], seen = Set<String>()
         func folder(of url: URL) -> String {
             let directory = url.deletingLastPathComponent().path
-            if let workspace, directory == workspace.path || directory.hasPrefix(workspace.path + "/") {
+            if let workspace = host.workspace, directory == workspace.path || directory.hasPrefix(workspace.path + "/") {
                 return workspace.lastPathComponent + directory.dropFirst(workspace.path.count)
             }
             return (directory as NSString).abbreviatingWithTildeInPath
@@ -1196,7 +1182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 else { let url = URL(fileURLWithPath: entry.path); add(entry.name, url, .file(url)) }
             }
         }
-        files(workspaceTree?.children ?? [])
+        files(host.workspaceTree?.children ?? [])
         return items
     }
     @objc func pasteAndMatchStyle(_ sender: Any?) {
