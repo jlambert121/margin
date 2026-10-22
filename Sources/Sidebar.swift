@@ -2,6 +2,8 @@ import Cocoa
 
 struct OpenFileEntry: Equatable {
     let id: String, name: String, path: String
+    // Folders that tell this file apart from open files with the same name, or empty.
+    var detail = ""
     let modified: Bool, current: Bool
 }
 
@@ -114,8 +116,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private let outlineScroll = NSScrollView()
     private let outlineEmpty = NSTextField(wrappingLabelWithString: "Add a heading to give your words a little structure.")
     private var roots: [SidebarNode] = []
-    private var applyingExpansion = false
-    // The filter and opened folders the tree was last built with.
+    // Set while the tree and the state are brought in line, so neither change echoes back into the other.
+    private var syncingTree = false
+    // The filter and opened folders the tree shows.
     private var appliedTree: (filter: String, toggled: Set<String>)?
     private var stateObserver: NSObjectProtocol?
 
@@ -242,7 +245,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         view.subviews.first { $0.identifier?.rawValue == "outline" }?.isHidden = state.mode != .outline
         if filterField.stringValue != state.filter { filterField.stringValue = state.filter }
         // Width and collapsing are in the state too, and change on every step of a divider drag.
-        if appliedTree.map({ $0.filter != state.filter || $0.toggled != state.toggledFolders }) ?? true { reloadFiles() }
+        if !syncingTree, appliedTree.map({ $0.filter != state.filter || $0.toggled != state.toggledFolders }) ?? true { reloadFiles() }
         outlineEmpty.isHidden = !headings.isEmpty
     }
 
@@ -268,16 +271,28 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         }
         roots = nodes
         appliedTree = (state.filter, state.toggledFolders)
-        applyingExpansion = true
+        syncingTree = true
         filesView.reloadData()
+        // AppKit only keeps a folder open inside a closed one if it was opened while showing, so a closed
+        // folder holding open ones is opened for them and closed again after.
         func expand(_ nodes: [SidebarNode]) {
             for node in nodes {
                 guard case let .folder(entry, depth) = node.kind else { continue }
-                if !query.isEmpty || state.isExpanded(entry, depth: depth) { filesView.expandItem(node); expand(node.children) }
+                let open = !query.isEmpty || state.isExpanded(entry, depth: depth)
+                guard open || holdsOpenFolder(node) else { continue }
+                filesView.expandItem(node)
+                expand(node.children)
+                if !open { filesView.collapseItem(node) }
             }
         }
+        func holdsOpenFolder(_ node: SidebarNode) -> Bool {
+            node.children.contains { if case let .folder(entry, depth) = $0.kind { return state.isExpanded(entry, depth: depth) || holdsOpenFolder($0) }; return false }
+        }
         expand(roots)
-        applyingExpansion = false
+        syncingTree = false
+        selectCurrentFile()
+    }
+    private func selectCurrentFile() {
         let current = roots.firstIndex { if case let .openFile(file) = $0.kind { return file.current }; return false }
         if let current { filesView.selectRowIndexes(IndexSet(integer: filesView.row(forItem: roots[current])), byExtendingSelection: false) }
         else { filesView.deselectAll(nil) }
@@ -302,6 +317,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case .openFolderPrompt: return 92
         case .message: return 40
         case .header: return 28
+        case let .openFile(file) where !file.detail.isEmpty: return 38
         default: return 26
         }
     }
@@ -327,10 +343,19 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     func outlineViewItemDidExpand(_ notification: Notification) { folderToggled(notification, expanded: true) }
     func outlineViewItemDidCollapse(_ notification: Notification) { folderToggled(notification, expanded: false) }
     private func folderToggled(_ notification: Notification, expanded: Bool) {
-        guard !applyingExpansion, state.filter.isEmpty, let node = notification.userInfo?["NSObject"] as? SidebarNode,
+        guard !syncingTree, state.filter.isEmpty, let node = notification.userInfo?["NSObject"] as? SidebarNode,
               case let .folder(entry, depth) = node.kind else { return }
+        // AppKit reports the open folders inside a collapsing folder as collapsing too, and as expanding when it
+        // reopens; only the folder toggled is remembered, unless Option closed the ones inside it as well.
+        if let parent = filesView.parent(forItem: node), !filesView.isItemExpanded(parent), expanded || !optionClicked { return }
+        // The view already shows the change, and AppKit is still walking its rows, so the tree is not rebuilt.
+        syncingTree = true
         state.setExpanded(expanded, folder: entry, depth: depth)
+        syncingTree = false
+        appliedTree = (state.filter, state.toggledFolders)
     }
+    // Option-clicking a folder also opens or closes the folders inside it, as on the disclosure triangle.
+    private var optionClicked: Bool { NSApp?.currentEvent?.modifierFlags.contains(.option) == true }
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let node = item as? SidebarNode else { return nil }
         switch node.kind {
@@ -346,7 +371,16 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             }
             return row(views)
         case let .openFile(file):
-            var views: [NSView] = [icon("doc.text"), name(file.name)]
+            let label = name(file.name)
+            var views: [NSView] = [icon("doc.text"), label]
+            if !file.detail.isEmpty {
+                let detail = NSTextField(labelWithString: file.detail)
+                detail.font = .systemFont(ofSize: 11); detail.textColor = .secondaryLabelColor; detail.lineBreakMode = .byTruncatingHead
+                [label, detail].forEach { $0.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
+                let lines = NSStackView(views: [label, detail])
+                lines.orientation = .vertical; lines.alignment = .leading; lines.spacing = 1
+                views[1] = lines
+            }
             if file.modified {
                 let dot = NSTextField(labelWithString: "●"); dot.font = .systemFont(ofSize: 7); dot.textColor = Self.accent; dot.toolTip = "Unsaved changes"
                 views.append(dot)
@@ -356,6 +390,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             close.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .medium)
             views += [NSView(), close]
             let cell = row(views); cell.toolTip = file.path.isEmpty ? file.name : file.path
+            cell.textField = label
             return cell
         case let .folder(entry, _):
             return row([icon("folder"), name(entry.name)])
@@ -424,10 +459,11 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         switch node.kind {
         case let .openFile(file): onSelectOpenFile(file.id)
         case let .file(entry): onOpenPath(entry.path)
-        case .folder: filesView.isItemExpanded(node) ? filesView.collapseItem(node) : filesView.expandItem(node)
+        case .folder:
+            if filesView.isItemExpanded(node) { filesView.collapseItem(node, collapseChildren: optionClicked) } else { filesView.expandItem(node, expandChildren: optionClicked) }
         default: break
         }
-        reloadSelectionSoon()
+        DispatchQueue.main.async { [weak self] in self?.selectCurrentFile() }
     }
     @objc private func outlineClicked(_ sender: Any?) { activateHeading(row: outlineView.clickedRow) }
     func activateHeading(row: Int) {
@@ -475,10 +511,12 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     func beginRename(path: String) {
         guard isViewLoaded, renamingPath == nil else { return }
         var ancestor = (path as NSString).deletingLastPathComponent
+        syncingTree = true
         while let folder, ancestor.hasPrefix(folder.path + "/") {
             if let node = node(forPath: ancestor), case let .folder(entry, depth) = node.kind, !state.isExpanded(entry, depth: depth) { state.setExpanded(true, folder: entry, depth: depth) }
             ancestor = (ancestor as NSString).deletingLastPathComponent
         }
+        syncingTree = false
         reloadFiles()
         guard let node = node(forPath: path), case .file = node.kind else { return }
         let row = filesView.row(forItem: node)
@@ -519,7 +557,6 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         }
         return find(roots)
     }
-    private func reloadSelectionSoon() { DispatchQueue.main.async { [weak self] in self?.reloadFiles() } }
 
     // MARK: Inspection for tests
 

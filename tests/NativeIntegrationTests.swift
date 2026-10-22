@@ -281,6 +281,51 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try expect(window.iconTiles[.quote]?.fillColor != .clear && window.iconTiles[.night]?.fillColor == .clear, "Selection highlight is wrong")
             settingsDefaults.removePersistentDomain(forName: settingsSuite)
         }
+        test("Collapsing a folder keeps the tree and remembers the folders open inside it, unless Option closed them") {
+            let sidebar = SidebarViewController(); _ = sidebar.view
+            let base = "/tmp/margin-tree"
+            func file(_ path: String) -> FolderEntry { FolderEntry(name: (path as NSString).lastPathComponent, path: base + path, children: nil) }
+            let inner = FolderEntry(name: "Inner", path: base + "/Outer/Middle/Inner", children: [file("/Outer/Middle/Inner/deep.md")])
+            let middle = FolderEntry(name: "Middle", path: base + "/Outer/Middle", children: [inner, file("/Outer/Middle/mid.md")])
+            let outer = FolderEntry(name: "Outer", path: base + "/Outer", children: [middle, file("/Outer/top.md")])
+            sidebar.state.toggledFolders = [middle.path, inner.path]
+            sidebar.setFolder(FolderEntry(name: "Tree", path: base, children: [outer, file("/root.md")]))
+            let open = ["Outer/", "  Middle/", "    Inner/", "      deep.md", "    mid.md", "  top.md", "root.md"], closed = ["Outer/", "root.md"]
+            try expect(sidebar.visibleTreeRows == open, "Unexpected tree: \(sidebar.visibleTreeRows)")
+            let files = sidebar.filesView, row = sidebar.rowIndex(named: "Outer")!
+            let node = files.item(atRow: row) as AnyObject
+            // AppKit is still walking the folders it collapsed when it reports them, so the tree must not be rebuilt then.
+            files.collapseItem(node)
+            try expect(files.item(atRow: row) as AnyObject === node, "Collapsing a folder rebuilt the tree")
+            try expect(sidebar.visibleTreeRows == closed, "Collapse incorrect: \(sidebar.visibleTreeRows)")
+            try expect(sidebar.state.toggledFolders == [outer.path, middle.path, inner.path], "Collapsing a folder forgot the folders open inside it: \(sidebar.state.toggledFolders)")
+            files.expandItem(node)
+            try expect(sidebar.visibleTreeRows == open, "Reopening a folder did not restore the folders inside it: \(sidebar.visibleTreeRows)")
+            files.collapseItem(node)
+            sidebar.currentPath = base + "/root.md"
+            try expect(sidebar.visibleTreeRows == closed && files.item(atRow: row) as AnyObject !== node, "Changing the current file did not rebuild the tree")
+            files.expandItem(files.item(atRow: row))
+            try expect(sidebar.visibleTreeRows == open, "A rebuilt tree did not keep the folders open inside a closed one: \(sidebar.visibleTreeRows)")
+            let rebuilt = files.item(atRow: row) as AnyObject
+            sidebar.activateFile(row: row)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            try expect(files.item(atRow: row) as AnyObject === rebuilt && sidebar.visibleTreeRows == closed, "Clicking a folder rebuilt the tree")
+            if let application {
+                func press(_ modifiers: NSEvent.ModifierFlags) {
+                    let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)!
+                    application.postEvent(event, atStart: true)
+                    _ = application.nextEvent(matching: .applicationDefined, until: .distantPast, inMode: .default, dequeue: true)
+                }
+                sidebar.activateFile(row: row)
+                try expect(sidebar.visibleTreeRows == open, "Clicking a closed folder did not open it: \(sidebar.visibleTreeRows)")
+                press(.option)
+                sidebar.activateFile(row: row)
+                press([])
+                try expect(sidebar.state.toggledFolders == [outer.path], "Option-collapsing a folder did not close the folders inside it: \(sidebar.state.toggledFolders)")
+                files.expandItem(files.item(atRow: row))
+                try expect(sidebar.visibleTreeRows == ["Outer/", "  Middle/", "  top.md", "root.md"], "Option-collapsed folders reopened: \(sidebar.visibleTreeRows)")
+            }
+        }
         if application != nil {
         test("Appearance setting reaches the app and a loaded editor") {
             let settings = Settings(defaults: settingsDefaults)

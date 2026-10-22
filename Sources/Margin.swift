@@ -1111,25 +1111,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             host?.workspace = url
         }
     }
+    // Breadth first, so a large subfolder can't use up the budget before shallower files are listed.
     static func scanFolder(_ workspace: URL) -> FolderEntry {
         var budget = 5000
-        func entries(_ url: URL, depth: Int) -> [FolderEntry] {
-            guard depth < 12, budget > 0,
-                  let children = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
-            var result = [FolderEntry]()
-            for child in children.sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
+        var listings: [String: (folders: [URL], files: [URL])] = [:]
+        var level = [workspace]
+        for _ in 0..<12 where budget > 0 && !level.isEmpty {
+            var next: [URL] = []
+            for url in level {
                 guard budget > 0 else { break }
-                guard let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]), values.isSymbolicLink != true else { continue }
-                budget -= 1
-                if values.isDirectory == true {
-                    if ["node_modules", "vendor", "build", "dist", "DerivedData"].contains(child.lastPathComponent) { continue }
-                    let nested = entries(child, depth: depth + 1)
-                    if !nested.isEmpty { result.append(FolderEntry(name: child.lastPathComponent, path: child.path, children: nested)) }
-                } else if markdownExtensions.contains(child.pathExtension.lowercased()) { result.append(FolderEntry(name: child.lastPathComponent, path: child.path, children: nil)) }
+                guard let children = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+                var listing: (folders: [URL], files: [URL]) = ([], [])
+                for child in children.sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
+                    guard budget > 0 else { break }
+                    guard let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]), values.isSymbolicLink != true else { continue }
+                    budget -= 1
+                    if values.isDirectory == true {
+                        if ["node_modules", "vendor", "build", "dist", "DerivedData"].contains(child.lastPathComponent) { continue }
+                        listing.folders.append(child)
+                    } else if markdownExtensions.contains(child.pathExtension.lowercased()) { listing.files.append(child) }
+                }
+                listings[url.path] = listing
+                next += listing.folders
             }
-            return result.sorted { ($0.children != nil ? 0 : 1) < ($1.children != nil ? 0 : 1) }
+            level = next
         }
-        return FolderEntry(name: workspace.lastPathComponent, path: workspace.path, children: entries(workspace, depth: 0))
+        func entries(_ url: URL) -> [FolderEntry] {
+            guard let listing = listings[url.path] else { return [] }
+            let folders = listing.folders.compactMap { folder -> FolderEntry? in
+                let nested = entries(folder)
+                return nested.isEmpty ? nil : FolderEntry(name: folder.lastPathComponent, path: folder.path, children: nested)
+            }
+            return folders + listing.files.map { FolderEntry(name: $0.lastPathComponent, path: $0.path, children: nil) }
+        }
+        return FolderEntry(name: workspace.lastPathComponent, path: workspace.path, children: entries(workspace))
     }
     func refreshFolders(completion: @escaping () -> Void = {}) {
         let group = DispatchGroup()

@@ -219,6 +219,21 @@ import UniformTypeIdentifiers
             let names = (AppDelegate.scanFolder(root).children ?? []).map(\.name)
             try expect(names.contains("Visible.md") && !names.contains(".hidden.md") && !names.contains("ignore.csv") && !names.contains("linked.md"), "Folder filtering failed")
         }
+        test("Folder navigation lists root files when a subfolder exceeds the scan budget") {
+            let workspace = root.appendingPathComponent("Budget"), large = workspace.appendingPathComponent("A large folder")
+            try FileManager.default.createDirectory(at: large, withIntermediateDirectories: true)
+            for index in 0..<5100 { FileManager.default.createFile(atPath: large.appendingPathComponent("\(index).md").path, contents: nil) }
+            try "# Root".write(to: workspace.appendingPathComponent("Root.md"), atomically: true, encoding: .utf8)
+            let names = (AppDelegate.scanFolder(workspace).children ?? []).map(\.name)
+            try expect(names == ["A large folder", "Root.md"], "Root files were missing: \(names)")
+        }
+        test("Open files that share a name show the fewest folders that tell them apart") {
+            let workspace = URL(fileURLWithPath: "/w")
+            func details(_ paths: [String?]) -> [String] { EditorWindowController.openFileDetails(paths.map { $0.map(URL.init(fileURLWithPath:)) }, workspace: workspace) }
+            try expect(details(["/w/README.md", "/w/docs/README.md", "/w/notes.md", nil]) == ["w", "docs", "", ""], "Root and folder details wrong: \(details(["/w/README.md", "/w/docs/README.md", "/w/notes.md", nil]))")
+            try expect(details(["/w/a/x/README.md", "/w/b/x/README.md"]) == ["a/x", "b/x"], "Shared parent names were not told apart")
+            try expect(details(["/elsewhere/one/README.md", "/w/README.md"]) == ["one", "w"], "Files outside the folder were not told apart")
+        }
         if failures > 0 { exit(1) }
     }
 }

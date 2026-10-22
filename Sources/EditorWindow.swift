@@ -31,6 +31,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             workspaceTree = nil; workspaceScan += 1
             sidebar.setFolder(nil)
             refreshFolder()
+            refresh()
             window?.invalidateRestorableState()
         }
     }
@@ -140,14 +141,36 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         if let doc = notification.object as? MarkdownDocument { documentDidChange(doc) }
     }
     private func refresh() {
-        sidebar.setOpenFiles(documents.map { doc in
-            OpenFileEntry(id: doc.recoveryID.uuidString, name: doc.editorName, path: doc.fileURL?.path ?? "", modified: doc.isDocumentEdited, current: doc === current)
+        let details = Self.openFileDetails(documents.map(\.fileURL), workspace: workspace)
+        sidebar.setOpenFiles(zip(documents, details).map { doc, detail in
+            OpenFileEntry(id: doc.recoveryID.uuidString, name: doc.editorName, path: doc.fileURL?.path ?? "", detail: detail, modified: doc.isDocumentEdited, current: doc === current)
         })
         sidebar.currentPath = current?.fileURL?.path ?? ""
         window?.title = current?.displayName ?? "Margin"
         window?.representedURL = current?.fileURL
         window?.isDocumentEdited = documents.contains { $0.isDocumentEdited }
         window?.invalidateRestorableState()
+    }
+    // Files that share a name get the fewest trailing folders that tell them apart. Folders in the
+    // workspace start from its name, so a file at its root shows the workspace's name.
+    static func openFileDetails(_ urls: [URL?], workspace: URL?) -> [String] {
+        let root = workspace?.standardizedFileURL.resolvingSymlinksInPath().path
+        func folders(_ url: URL) -> [String] {
+            let directory = url.standardizedFileURL.resolvingSymlinksInPath().deletingLastPathComponent().path
+            if let root, directory == root || directory.hasPrefix(root + "/") {
+                return [(root as NSString).lastPathComponent] + directory.dropFirst(root.count).split(separator: "/").map(String.init)
+            }
+            return (directory as NSString).abbreviatingWithTildeInPath.split(separator: "/").map(String.init)
+        }
+        var details = Array(repeating: "", count: urls.count)
+        let named = Dictionary(grouping: urls.indices.filter { urls[$0] != nil }) { urls[$0]!.lastPathComponent }
+        for indices in named.values where indices.count > 1 {
+            let paths = indices.map { folders(urls[$0]!) }
+            let longest = max(paths.map(\.count).max() ?? 0, 1)
+            let count = (1...longest).first { count in Set(paths.map { $0.suffix(count).joined(separator: "/") }).count == paths.count } ?? longest
+            for (index, path) in zip(indices, paths) { details[index] = path.suffix(count).joined(separator: "/") }
+        }
+        return details
     }
     private func document(id: String) -> MarkdownDocument? { documents.first { $0.recoveryID.uuidString == id } }
 
