@@ -26,6 +26,7 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding
 - Files changed by another application reload automatically when there are no unsaved changes. With unsaved changes, a banner offers Reload, Keep mine, or Compare, which shows each disk change inline in source mode to keep or take one at a time or all at once.
 - Find and replace, optionally with regular expressions (`$1`, `$&`, and `$<name>` in replacements), and Go to Line (`line` or `line:column`; also opened by clicking the cursor position in the status bar).
 - Fenced code blocks are syntax highlighted in the language their info string names, for every language CodeMirror ships.
+- `mermaid` code fences render as diagrams (with [Pele](https://github.com/obsidianmd/pele)) in the editor, HTML export, and printing, in the theme's colors. Clicking a diagram shows its source; a diagram that cannot render stays a code block, labeled with its error.
 - Brackets, double quotes, and backticks close as you type; typing `*`, `_`, or `~` over a selection wraps it.
 - Pasting from a web page or a document converts its formatting to Markdown: headings, emphasis, links, lists, tables, and code. Clipboard HTML without such structure, such as code copied from an editor, pastes as plain text, as does anything pasted into code or with Paste and Match Style.
 - YAML front matter at the top of a document shows as a labeled metadata block, and stays out of the outline, word count, HTML export, and printing.
@@ -79,7 +80,7 @@ Command-click links to open them. New documents, File → Open, Open Recent, Fin
 - `web/src/app.js`: CodeMirror editor setup, bridge messages, navigation, search, formatting commands, and view state.
 - `web/src/live-preview.js`: the live preview, built from CodeMirror decorations over the Markdown syntax tree.
 - `web/src/table-editor.js`: the grid table editor, a CodeMirror widget that edits the table's Markdown text.
-- `web/src/markdown.js`: Markdown to sanitized HTML (markdown-it and DOMPurify) for export, printing, statistics, and table previews; pasted HTML to Markdown (Turndown); and the front matter rule.
+- `web/src/markdown.js`: Markdown to sanitized HTML (markdown-it and DOMPurify) for export, printing, statistics, and table previews; Mermaid diagrams to sanitized SVG (Pele); pasted HTML to Markdown (Turndown); and the front matter rule.
 - `web/src/style.css`: writing typography, application layout, themes, and print styles.
 - `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing and every CodeMirror code language, markdown-it, DOMPurify, and Turndown), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
 - `tools/editor-bundle/` and `scripts/build-editor.sh` (`npm run build:editor`): rebuild the vendored bundle with Rollup. Only needed after changing the bundle entry or a dependency version, and the only step that needs `npm install` (Node.js 20 or later).
@@ -112,7 +113,7 @@ Save and Save As read the editor's current text first when the editor is availab
 
 ## First-version boundaries
 
-This implements the core Markdown editing workflow. Math typesetting, Mermaid rendering, footnote tooling, custom CSS theme import, Pandoc formats, and iCloud coordination are not implemented. Code highlighting is in the editor only; HTML export and printing show code fences as plain code.
+This implements the core Markdown editing workflow. Math typesetting, footnote tooling, custom CSS theme import, Pandoc formats, and iCloud coordination are not implemented. Code highlighting is in the editor only; HTML export and printing show code fences other than Mermaid diagrams as plain code.
 
 The editor edits the Markdown text directly, so the file keeps exactly what was typed; nothing is reformatted. Syntax the live preview does not render, such as math and HTML, stays visible as text. The app rejects files that are not UTF-8.
 

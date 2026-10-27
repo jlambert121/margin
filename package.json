@@ -29,6 +29,7 @@
     "@rollup/plugin-terser": "1.0.0",
     "dompurify": "3.4.17",
     "markdown-it": "15.0.3",
+    "pele": "1.12.0",
     "rollup": "4.64.7",
     "turndown": "7.2.4"
   }

@@ -1218,6 +1218,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsWindow?.refresh()
         settingsWindow?.showWindow(sender)
     }
+    @objc func makeDefaultMarkdownEditor(_ sender: Any?) {
+        guard let markdown = UTType(markdownType) else { return }
+        NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpen: markdown) { error in
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                if let error {
+                    alert.alertStyle = .warning
+                    alert.messageText = "Couldn’t make Margin the default Markdown editor"
+                    alert.informativeText = error.localizedDescription
+                } else {
+                    alert.messageText = "Margin is now the default Markdown editor"
+                }
+                alert.runModal()
+            }
+        }
+    }
     func applySettings() {
         NSApp?.appearance = settings.appearance.appearance
         NSApp?.applicationIconImage = settings.appIcon.dockImage
@@ -1256,6 +1272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(app, "About Margin", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
         app.addItem(.separator())
         item(app, "Settings…", #selector(showSettings(_:)), ",", target: self)
+        item(app, "Make Margin the Default Markdown Editor…", #selector(makeDefaultMarkdownEditor(_:)), target: self)
         app.addItem(.separator())
         item(app, "Hide Margin", #selector(NSApplication.hide(_:)), "h")
         item(app, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", modifiers: [.command, .option])

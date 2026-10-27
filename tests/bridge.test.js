@@ -213,5 +213,16 @@
       assert(messages.some(message => message.action === 'editorError' && message.message === expected), `Missing native error: ${expected}`);
     }
   });
+  await test('Exported HTML is a standalone page with styled Mermaid diagrams', () => {
+    app.load({ text: '# Diagram\n\n```mermaid\nflowchart LR\n  A[Start] --> B[Done]\n```\n', token: 'export-load' });
+    app.command('exportHTML');
+    const html = messages.findLast(message => message.action === 'exportHTML')?.html ?? '';
+    const page = new DOMParser().parseFromString(html, 'text/html');
+    const svg = page.querySelector('figure.mermaid-diagram > svg.pele');
+    assert(svg && svg.textContent.includes('Start') && svg.textContent.includes('Done'), 'Export lacks the diagram: ' + html.slice(0, 300));
+    assert(/--_bg:var\(--pele-bg,#fff\)/.test(svg.getAttribute('style') ?? ''), 'Exported diagram lost its fallback colors');
+    assert(/\.pele\{--pele-fg:#303633/.test(page.querySelector('style')?.textContent ?? ''), 'Export stylesheet lacks the diagram palette');
+    assert(!page.querySelector('script, link[rel=stylesheet]'), 'Export depends on outside files');
+  });
   return results;
 })();

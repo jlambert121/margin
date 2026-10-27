@@ -72,6 +72,13 @@
     eq(other) { return other.label === this.label; }
     toDOM() { const label = document.createElement('span'); label.className = 'cm-md-fence-label'; label.textContent = this.label; return label; }
   }
+  // A rendered Mermaid diagram. Clicking it places the cursor in the fence, which shows its source.
+  class DiagramWidget extends WidgetType {
+    constructor(svg) { super(); this.svg = svg; }
+    eq(other) { return other.svg === this.svg; }
+    toDOM() { const diagram = document.createElement('div'); diagram.className = 'cm-md-diagram'; diagram.innerHTML = this.svg; return diagram; }
+    ignoreEvent() { return false; }
+  }
   // Clicking toggles the marker's text; the widget keeps the selection where it is.
   class CheckboxWidget extends WidgetType {
     constructor(checked) { super(); this.checked = checked; }
@@ -222,14 +229,21 @@
         }
         case 'FencedCode': {
           const first = doc.lineAt(from), last = doc.lineAt(to);
+          const info = children(node, 'CodeInfo')[0];
+          let label = info ? doc.sliceString(info.from, info.to) : '';
+          const closed = last.number > first.number && /^\s*(```|~~~)/.test(last.text);
+          if (closed && !touches(from, to) && MarginMarkdown.isMermaid(label)) {
+            const code = children(node, 'CodeText')[0];
+            const diagram = MarginMarkdown.renderDiagram(code ? doc.sliceString(code.from, code.to) : '', { links: false });
+            if (diagram.svg) { add(Decoration.replace({ widget: new DiagramWidget(diagram.svg), block: true }), first.from, last.to); return false; }
+            label = `${label} · ${diagram.error}`;
+          }
           eachLine(from, to, line => lineClass('cm-md-codeblock', line.from));
           lineClass('cm-md-codeblock-first', first.from);
           lineClass('cm-md-codeblock-last', last.from);
           if (!touches(from, to)) {
-            const info = children(node, 'CodeInfo')[0];
-            const label = info ? doc.sliceString(info.from, info.to) : '';
             add(Decoration.replace(label ? { widget: new FenceLabelWidget(label) } : {}), first.from, first.to);
-            if (last.number > first.number && /^\s*(```|~~~)/.test(last.text)) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
+            if (closed) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
             if (!label) lineClass('cm-md-fence-hidden', first.from);
           }
           return false;

@@ -1,8 +1,8 @@
 /* Markdown to sanitized HTML for export, printing, statistics, and table previews,
-   and pasted HTML to Markdown. */
+   Mermaid diagrams to sanitized SVG, and pasted HTML to Markdown. */
 (() => {
   'use strict';
-  const { MarkdownIt, DOMPurify, TurndownService, turndownGfm } = MarginEditor;
+  const { MarkdownIt, DOMPurify, TurndownService, turndownGfm, renderMermaid } = MarginEditor;
   // GFM task items: markdown-it parses "[ ] text" in a list item as plain text.
   function taskLists(md) {
     md.core.ruler.after('inline', 'task-lists', state => {
@@ -31,8 +31,30 @@
     const close = lines.findIndex((line, index) => index > 1 && frontmatter.close.test(line));
     return close === -1 ? '' : lines.slice(close + 1).join('\n');
   }
+  // Rendered diagrams are cached by source, since the editor redraws on every selection change.
+  const isMermaid = info => /^mermaid$/i.test(info.trim().split(/\s/)[0]);
+  const diagrams = new Map();
+  function renderDiagram(source, { links = true } = {}) {
+    const key = `${links}\n${source}`;
+    if (!diagrams.has(key)) {
+      if (diagrams.size >= 100) diagrams.clear();
+      try { diagrams.set(key, { svg: DOMPurify.sanitize(renderMermaid(source, { links }).svg) }); }
+      catch (error) { diagrams.set(key, { error: String(error?.message ?? error).split('\n')[0] }); }
+    }
+    return diagrams.get(key);
+  }
+  // Mermaid fences render as diagrams; one that cannot render stays a code block.
+  function mermaidFences(md) {
+    const fence = md.renderer.rules.fence;
+    md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+      const token = tokens[idx];
+      const diagram = isMermaid(token.info) ? renderDiagram(token.content) : null;
+      return diagram?.svg ? `<figure class="mermaid-diagram">${diagram.svg}</figure>\n` : fence(tokens, idx, options, env, self);
+    };
+  }
   const renderer = html => new MarkdownIt({ html, linkify: true }).use(taskLists);
-  const documentRenderer = renderer(true);
+  // Statistics use the fragment renderer, so diagram labels are not counted as words.
+  const documentRenderer = renderer(true).use(mermaidFences);
   const fragmentRenderer = renderer(false);
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-', emDelimiter: '*', hr: '---' });
   turndown.use(turndownGfm);
@@ -75,6 +97,8 @@
   window.MarginMarkdown = {
     fromHTML,
     frontmatter,
+    isMermaid,
+    renderDiagram,
     renderDocument: text => DOMPurify.sanitize(documentRenderer.render(withoutFrontmatter(text))),
     renderFragment: text => DOMPurify.sanitize(fragmentRenderer.render(withoutFrontmatter(text))),
     renderInline: text => DOMPurify.sanitize(fragmentRenderer.renderInline(text)),

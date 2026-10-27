@@ -407,6 +407,33 @@
     app.preparePrint();
     assert(document.querySelector('#print-view input[type=checkbox]') && document.querySelector('#print-view td'), 'Print view not rendered');
   });
+  await test('Mermaid fences render as diagrams and show their source at the cursor', async () => {
+    const text = 'Intro\n\n```mermaid\nflowchart LR\n  A[Start] --> B[Done]\n```\n\n```mermaid\nflowchart LR\n  A -->\n```\n';
+    app.load({ text, name: 'Diagrams.md' }); blur(); await tick();
+    const svg = document.querySelector('#editor .cm-md-diagram svg.pele');
+    assert(svg && svg.textContent.includes('Start') && svg.textContent.includes('Done'), 'Diagram not rendered');
+    assert(getComputedStyle(svg).getPropertyValue('--pele-accent').trim(), 'Diagram does not follow the theme colors');
+    assert(!$$('.cm-line').some(line => line.textContent.includes('A[Start]')), 'Diagram source shown while not editing');
+    assert($$('.cm-md-fence-label').some(label => /^mermaid · Parse error/.test(label.textContent)), 'Invalid diagram has no error label');
+    assert($$('.cm-line').some(line => line.textContent === '  A -->'), 'Invalid diagram not shown as code');
+    cursorAt(text.indexOf('A[Start]')); await tick();
+    assert(!document.querySelector('#editor .cm-md-diagram') && $$('.cm-line').some(line => line.textContent === '  A[Start] --> B[Done]'), 'Diagram source not shown at the cursor');
+    blur(); await tick();
+    assert(document.querySelector('#editor .cm-md-diagram svg'), 'Diagram did not render after leaving it');
+    assert(app.getMarkdown() === text, 'Rendering changed the Markdown');
+  });
+  await test('Export and print render Mermaid diagrams as styled SVG', async () => {
+    app.load({ text: '```mermaid\nsequenceDiagram\n  Alice->>Bob: Hello\n```\n\n```mermaid\nnot a diagram\n```\n\n```mermaid\nflowchart LR\n  A --> B\n  click A "https://example.com"\n  click B "javascript:alert(1)"\n```\n', name: 'Export.md' });
+    const html = app.getHTML();
+    const page = new DOMParser().parseFromString(html, 'text/html');
+    const figures = page.querySelectorAll('figure.mermaid-diagram > svg.pele');
+    assert(figures.length === 2 && figures[0].textContent.includes('Hello'), 'Rendered HTML lacks diagrams: ' + html.slice(0, 300));
+    assert(/--_fg:var\(--pele-fg,/.test(figures[0].getAttribute('style') ?? ''), 'Sanitizing removed the diagram colors');
+    assert(page.querySelector('pre code.language-mermaid')?.textContent.includes('not a diagram'), 'Unrenderable diagram not kept as code');
+    assert(page.querySelector('svg.pele a[href="https://example.com/"]') && !html.includes('javascript:'), 'Diagram links not filtered');
+    app.preparePrint();
+    assert(document.querySelectorAll('#print-view figure.mermaid-diagram svg.pele').length === 2, 'Print view lacks diagrams');
+  });
   app.load({ text: app.welcome, name: 'Welcome.md' });
   app.command('folder', { name: 'My Writing', children: [{ name: 'Welcome.md', path: '/Welcome.md' }, { name: 'Notes', children: [{ name: 'A small idea.md', path: '/idea.md' }, { name: 'Reading list.md', path: '/reading.md' }] }] });
   await tick();

@@ -391,6 +391,29 @@ body.sidebar-open #toggle-sidebar,body.sidebar-open .toolbar-left .divider {
   color:var(--muted)
 }
 
+/* Diagram colors follow the theme; Pele's SVG reads them from these variables. */
+.pele {
+  --pele-bg:var(--paper);
+  --pele-fg:var(--text);
+  --pele-muted:var(--muted);
+  --pele-line:var(--text);
+  --pele-surface:var(--code);
+  --pele-surface-alt:var(--hover);
+  --pele-border:var(--muted);
+  --pele-accent:var(--accent)
+}
+
+.cm-md-diagram {
+  padding:10px 0;
+  text-align:center;
+  cursor:text
+}
+
+.cm-md-diagram svg,.mermaid-diagram svg {
+  max-width:100%;
+  height:auto
+}
+
 .cm-md-table-source {
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   font-size:calc(14px * var(--text-zoom))
@@ -853,7 +876,21 @@ body[data-theme=dark] {
   #print-view .task-list-item {
     list-style:none
   }
-  #print-view pre,#print-view blockquote,#print-view tr,#print-view img {
+  #print-view .mermaid-diagram {
+    margin:1em 0;
+    text-align:center
+  }
+  #print-view .pele {
+    --pele-bg:#fff;
+    --pele-fg:#222;
+    --pele-muted:#666;
+    --pele-line:#222;
+    --pele-surface:#f5f5f5;
+    --pele-surface-alt:#e9e9e9;
+    --pele-border:#888;
+    --pele-accent:#537460
+  }
+  #print-view pre,#print-view blockquote,#print-view tr,#print-view img,#print-view .mermaid-diagram {
     break-inside:avoid
   }
 }

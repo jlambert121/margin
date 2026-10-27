@@ -21,3 +21,5 @@ export { default as DOMPurify } from 'dompurify';
 // Pasted HTML to Markdown. The browser build parses with the page's DOM.
 export { default as TurndownService } from 'turndown/lib/turndown.browser.es.js';
 export { gfm as turndownGfm } from '@joplin/turndown-plugin-gfm';
+// Mermaid diagrams to SVG.
+export { render as renderMermaid } from 'pele';
