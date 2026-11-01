@@ -274,12 +274,23 @@ body.sidebar-open #toggle-sidebar,body.sidebar-open .toolbar-left .divider {
 }
 
 .cm-md-code {
-  background:var(--code);
+  position:relative;
   color:var(--accent);
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   font-size:.81em;
   padding:3px 5px;
   border-radius:3px
+}
+
+/* Keep the code surface behind CodeMirror's selection layer. */
+.cm-md-code::before {
+  content:"";
+  position:absolute;
+  z-index:-10;
+  inset:0;
+  background:var(--code);
+  border-radius:inherit;
+  pointer-events:none
 }
 
 .cm-md-link {
