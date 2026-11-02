@@ -831,7 +831,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 var selected = false
                 editor.webView.evaluateJavaScript("app.view.dispatch({selection:{anchor:24,head:28}}); app.view.focus(); true") { _, _ in selected = true }
                 try waitUntil { selected }
-                func snapshot(_ name: String) throws {
+                @MainActor func snapshot(_ name: String) throws {
                     var result: Result<NSImage, Error>?
                     editor.webView.takeSnapshot(with: nil) { image, error in
                         if let image {
@@ -859,7 +859,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 defer { doc.close() }
                 guard let editor = doc.editor, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
                 try waitUntil { editor.canSynchronize }
-                func script(_ source: String) throws -> Any? {
+                @MainActor func script(_ source: String) throws -> Any? {
                     var result: Result<Any?, Error>?
                     editor.webView.evaluateJavaScript(source) { value, error in
                         if let error {
