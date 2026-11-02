@@ -859,11 +859,19 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 let activationPolicy = NSApp.activationPolicy()
                 NSApp.setActivationPolicy(.regular)
                 defer { NSApp.setActivationPolicy(activationPolicy) }
+                let applicationDelegate = NSApp.delegate
+                NSApp.delegate = nil
+                NSApp.finishLaunching()
+                NSApp.delegate = applicationDelegate
                 if #available(macOS 14, *) {
                     NSApp.activate()
                 } else {
                     NSApp.activate(ignoringOtherApps: true)
                 }
+                RunLoop.current.run(until: Date().addingTimeInterval(1))
+                // The direct CLI fixture needs this compatibility activation path before dispatching AppKit events.
+                // Empty options were independently measured to leave it inactive on this host.
+                NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
                 try awaitNativeEvents { NSApp.isActive }
                 window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor.webView)
                 var selected = false
