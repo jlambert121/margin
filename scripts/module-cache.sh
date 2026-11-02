@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Sourced by the build and test scripts from the repository root.
 # Compiled module caches embed the absolute path they were built under, so a
 # moved or renamed checkout fails every compile until the cache is rebuilt.
