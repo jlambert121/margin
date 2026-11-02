@@ -1,10 +1,10 @@
 import Cocoa
 import WebKit
 
-// Runs a test script in the real editor page. The bridge suite runs the page in
-// native mode, against a handler that only needs to exist.
+/// Runs a test script in the real editor page. The bridge suite runs the page in
+/// native mode, against a handler that only needs to exist.
 final class MessageSink: NSObject, WKScriptMessageHandler {
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {}
+    func userContentController(_: WKUserContentController, didReceive _: WKScriptMessage) {}
 }
 
 final class Suite: NSObject, WKNavigationDelegate {
@@ -25,24 +25,31 @@ final class Suite: NSObject, WKNavigationDelegate {
         super.init()
         view.navigationDelegate = self
     }
+
     func run(_ finished: @escaping ([[String: Any]]) -> Void) {
         self.finished = finished
         view.loadFileURL(root.appendingPathComponent("web/index.html"), allowingReadAccessTo: root)
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+
+    func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
         let script = try! String(contentsOf: root.appendingPathComponent(testFile), encoding: .utf8)
         webView.callAsyncJavaScript("return await \(script)", arguments: [:], in: nil, in: .page) { result in
             switch result {
-            case .failure(let error): fputs("\(self.testFile): \(error)\n", stderr); exit(1)
-            case .success(let value): self.finished?(value as? [[String: Any]] ?? [])
+            case let .failure(error): fputs("\(self.testFile): \(error)\n", stderr); exit(1)
+            case let .success(value): self.finished?(value as? [[String: Any]] ?? [])
             }
         }
     }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fputs("Navigation failed: \(error)\n", stderr); exit(1) }
+
+    func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
+        fputs("Navigation failed: \(error)\n", stderr); exit(1)
+    }
 }
 
 func report(_ results: [[String: Any]]) -> Bool {
-    for result in results { print("\(result["passed"] as? Bool == true ? "PASS" : "FAIL") \(result["name"] ?? "") \(result["error"] ?? "")") }
+    for result in results {
+        print("\(result["passed"] as? Bool == true ? "PASS" : "FAIL") \(result["name"] ?? "") \(result["error"] ?? "")")
+    }
     return !results.isEmpty && results.allSatisfy { $0["passed"] as? Bool == true }
 }
 
@@ -59,12 +66,16 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 60) { fputs("Editor tests timed
 editorSuite.run { editorResults in
     let editorPassed = report(editorResults)
     editorSuite.view.takeSnapshot(with: nil) { image, error in
-        if let image, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let data = bitmap.representation(using: .png, properties: [:]) { try? data.write(to: output) }
-        else { fputs("Screenshot unavailable: \(String(describing: error))\n", stderr) }
+        if let image, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let data = bitmap.representation(using: .png, properties: [:]) {
+            try? data.write(to: output)
+        } else {
+            fputs("Screenshot unavailable: \(String(describing: error))\n", stderr)
+        }
         bridgeSuite.run { bridgeResults in
             let bridgePassed = report(bridgeResults)
             exit(editorPassed && bridgePassed ? 0 : 1)
         }
     }
 }
+
 app.run()

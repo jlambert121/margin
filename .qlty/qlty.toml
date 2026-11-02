@@ -1,0 +1,35 @@
+config_version = "0"
+
+exclude_patterns = [
+  "build/**",
+  ".build/**",
+  "DerivedData/**",
+  "node_modules/**",
+  "web/vendor/**",
+]
+
+test_patterns = ["tests/**"]
+
+[smells]
+mode = "comment"
+
+[[source]]
+name = "default"
+default = true
+
+[[plugin]]
+name = "osv-scanner"
+
+[[plugin]]
+name = "ripgrep"
+mode = "comment"
+
+[[plugin]]
+name = "shellcheck"
+
+[[plugin]]
+name = "trufflehog"
+mode = "block"
+
+[[plugin]]
+name = "swiftformat"

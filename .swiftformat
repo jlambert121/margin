@@ -1,0 +1,3 @@
+--indent 4
+--linebreaks lf
+--exclude build,.build,DerivedData,node_modules,web/vendor

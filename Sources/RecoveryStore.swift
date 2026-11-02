@@ -18,15 +18,17 @@ struct RecoveryDraft: Codable, Equatable {
     }
 }
 
-// All disk operations share a queue so a delayed checkpoint cannot recreate a
-// draft after a successful save or an intentional close removed it.
+/// All disk operations share a queue so a delayed checkpoint cannot recreate a
+/// draft after a successful save or an intentional close removed it.
 final class RecoveryStore {
     static let shared = RecoveryStore(directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Margin/Recovery", isDirectory: true))
     let directory: URL
     private let queue = DispatchQueue(label: "com.infiniteviewtech.margin.recovery", qos: .utility)
 
-    init(directory: URL) { self.directory = directory }
+    init(directory: URL) {
+        self.directory = directory
+    }
 
     private func writeOnQueue(_ draft: RecoveryDraft) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -35,7 +37,9 @@ final class RecoveryStore {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    func write(_ draft: RecoveryDraft) throws { try queue.sync { try writeOnQueue(draft) } }
+    func write(_ draft: RecoveryDraft) throws {
+        try queue.sync { try writeOnQueue(draft) }
+    }
 
     func writeAsync(_ draft: RecoveryDraft, completion: @escaping (Error?) -> Void) {
         queue.async {
@@ -49,7 +53,7 @@ final class RecoveryStore {
     func remove(_ id: UUID) throws {
         try queue.sync {
             do { try FileManager.default.removeItem(at: directory.appendingPathComponent(id.uuidString + ".json")) }
-            catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError { }
+            catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {}
         }
     }
 
@@ -74,8 +78,8 @@ final class RecoveryStore {
     }
 }
 
-// An acknowledgement belongs to one load. Old messages must never replace
-// text after Undo, Revert, or reloading a failed editor.
+/// An acknowledgement belongs to one load. Old messages must never replace
+/// text after Undo, Revert, or reloading a failed editor.
 struct EditorSession {
     private(set) var token = UUID().uuidString
     private(set) var isLoaded = false
@@ -87,10 +91,17 @@ struct EditorSession {
         revision = 0
         return token
     }
+
     mutating func acknowledge(_ candidate: String) {
-        if candidate == token { isLoaded = true }
+        if candidate == token {
+            isLoaded = true
+        }
     }
-    func accepts(_ candidate: String) -> Bool { isLoaded && candidate == token }
+
+    func accepts(_ candidate: String) -> Bool {
+        isLoaded && candidate == token
+    }
+
     mutating func acceptChange(token candidate: String, revision next: Int) -> Bool {
         guard accepts(candidate), next > revision else { return false }
         revision = next

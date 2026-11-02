@@ -71,8 +71,9 @@ Command-click links to open them. New documents, File → Open, Open Recent, Fin
 
 ## Implementation
 
-- `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, each document's editor and its bridge to the web editor, menus, file panels, workspace scanning, export/printing, and the restricted local-image URL handler.
+- `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, each document's editor and its bridge to the web editor, menus, file panels, export/printing, and the restricted local-image URL handler.
 - `Sources/EditorWindow.swift`: a window, its ordered documents, and restoring them at launch.
+- `Sources/WorkspaceScanner.swift`: Foundation-only workspace scanning and its folder tree model.
 - `Sources/Sidebar.swift`: the native sidebar and its state.
 - `Sources/QuickOpen.swift`: the Quick Open panel and its file matching.
 - `Sources/Settings.swift`: stored settings and the Settings window.
@@ -93,6 +94,7 @@ For Swift changes, rebuild the app. Web files are copied during every build. Run
 
 ```sh
 npm test               # syntax checks, native unit checks, and WebKit editor checks
+npm run test:workspace # workspace filesystem checks without AppKit or WebKit
 npm run test:native    # desktop checks: windows and their documents, the sidebar, open and save, files changed on disk
 npm run test:webkit    # WebKit editor checks only; writes build/editor-screenshot.png
 ```

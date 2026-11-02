@@ -1,6 +1,6 @@
 import Cocoa
-import WebKit
 import UniformTypeIdentifiers
+import WebKit
 
 @main struct DocumentTests {
     static func main() throws {
@@ -10,7 +10,9 @@ import UniformTypeIdentifiers
             catch { failures += 1; print("FAIL \(name): \(error)") }
         }
         func expect(_ condition: Bool, _ message: String) throws {
-            if !condition { throw NSError(domain: "Tests", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+            if !condition {
+                throw NSError(domain: "Tests", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+            }
         }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("margin-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -26,7 +28,7 @@ import UniformTypeIdentifiers
         test("Invalid UTF-8 is rejected without replacing existing contents") {
             let doc = MarkdownDocument(); doc.text = "Keep this"
             var rejected = false
-            do { try doc.read(from: Data([0xff, 0xfe, 0xff]), ofType: markdownType) } catch { rejected = true }
+            do { try doc.read(from: Data([0xFF, 0xFE, 0xFF]), ofType: markdownType) } catch { rejected = true }
             try expect(rejected && doc.text == "Keep this", "Invalid encoding accepted")
         }
         test("File writing and reading round trip on disk") {
@@ -94,7 +96,9 @@ import UniformTypeIdentifiers
             doc.onRecoveryError = { reported = $0 }
             doc.edited("My unsaved work"); doc.flushRecovery()
             let limit = Date().addingTimeInterval(3)
-            while reported == nil && Date() < limit { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            while reported == nil, Date() < limit {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
             try expect(reported != nil, "Recovery failure was silent")
             try expect(doc.text == "My unsaved work" && doc.isDocumentEdited, "Recovery failure cleared the edits")
             try expect(try String(contentsOf: blocked, encoding: .utf8) == "Keep this file", "Recovery failure damaged an existing file")
@@ -120,10 +124,14 @@ import UniformTypeIdentifiers
             try FileManager.default.setAttributes([.modificationDate: nextDiskDate], ofItemAtPath: url.path)
             nextDiskDate.addTimeInterval(5)
         }
-        func diskText(_ url: URL) throws -> String { try String(contentsOf: url, encoding: .utf8) }
+        func diskText(_ url: URL) throws -> String {
+            try String(contentsOf: url, encoding: .utf8)
+        }
         func wait(_ message: String, until finished: () -> Bool) throws {
             let limit = Date().addingTimeInterval(5)
-            while !finished() && Date() < limit { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            while !finished(), Date() < limit {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
             try expect(finished(), message)
         }
         func checkDisk(_ doc: MarkdownDocument) throws {
@@ -183,7 +191,9 @@ import UniformTypeIdentifiers
                 failure = error; finished = true
             }
             try wait("Save As did not finish") { finished }
-            if let failure { throw failure }
+            if let failure {
+                throw failure
+            }
             try expect(try diskText(original) == "# Their edits\n", "Save As overwrote the original disk version")
             try expect(try diskText(destination) == "# My edits\n", "Save As lost the unsaved edits")
             try expect(doc.fileURL == destination && !doc.isDocumentEdited && doc.diskConflict == nil, "Save As did not resolve the conflict at the new path")
@@ -208,7 +218,7 @@ import UniformTypeIdentifiers
             try checkDisk(doc)
             let date = try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             try expect(doc.diskConflict == nil && doc.fileModificationDate == date, "A matching disk version was treated as a conflict")
-            try writeElsewhere(Data([0xff, 0xfe, 0xff]), to: url)
+            try writeElsewhere(Data([0xFF, 0xFE, 0xFF]), to: url)
             try checkDisk(doc)
             try checkDisk(doc)
             try expect(errors.count == 1 && doc.text == "# Same\n" && doc.diskConflict == nil, "An unreadable disk version was not reported once: \(errors.count)")
@@ -216,7 +226,7 @@ import UniformTypeIdentifiers
         test("Local images load while traversal, symlinks, and non-images are rejected") {
             let images = root.appendingPathComponent("images")
             try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
-            let bytes = Data([0x89, 0x50, 0x4e, 0x47])
+            let bytes = Data([0x89, 0x50, 0x4E, 0x47])
             try bytes.write(to: images.appendingPathComponent("A picture.png"))
             try bytes.write(to: root.appendingPathComponent("outside.png"))
             try bytes.write(to: images.appendingPathComponent("private.txt"))
@@ -230,29 +240,17 @@ import UniformTypeIdentifiers
                 try expect(rejected, "Unsafe image path was accepted: \(path)")
             }
         }
-        test("Folder navigation includes Markdown and skips hidden files and symlinks") {
-            try "# Visible".write(to: root.appendingPathComponent("Visible.md"), atomically: true, encoding: .utf8)
-            try "# Hidden".write(to: root.appendingPathComponent(".hidden.md"), atomically: true, encoding: .utf8)
-            try "Other".write(to: root.appendingPathComponent("ignore.csv"), atomically: true, encoding: .utf8)
-            try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("linked.md"), withDestinationURL: root.appendingPathComponent("Visible.md"))
-            let names = (AppDelegate.scanFolder(root).children ?? []).map(\.name)
-            try expect(names.contains("Visible.md") && !names.contains(".hidden.md") && !names.contains("ignore.csv") && !names.contains("linked.md"), "Folder filtering failed")
-        }
-        test("Folder navigation lists root files when a subfolder exceeds the scan budget") {
-            let workspace = root.appendingPathComponent("Budget"), large = workspace.appendingPathComponent("A large folder")
-            try FileManager.default.createDirectory(at: large, withIntermediateDirectories: true)
-            for index in 0..<5100 { FileManager.default.createFile(atPath: large.appendingPathComponent("\(index).md").path, contents: nil) }
-            try "# Root".write(to: workspace.appendingPathComponent("Root.md"), atomically: true, encoding: .utf8)
-            let names = (AppDelegate.scanFolder(workspace).children ?? []).map(\.name)
-            try expect(names == ["A large folder", "Root.md"], "Root files were missing: \(names)")
-        }
         test("Open files that share a name show the fewest folders that tell them apart") {
             let workspace = URL(fileURLWithPath: "/w")
-            func details(_ paths: [String?]) -> [String] { EditorWindowController.openFileDetails(paths.map { $0.map(URL.init(fileURLWithPath:)) }, workspace: workspace) }
+            func details(_ paths: [String?]) -> [String] {
+                EditorWindowController.openFileDetails(paths.map { $0.map(URL.init(fileURLWithPath:)) }, workspace: workspace)
+            }
             try expect(details(["/w/README.md", "/w/docs/README.md", "/w/notes.md", nil]) == ["w", "docs", "", ""], "Root and folder details wrong: \(details(["/w/README.md", "/w/docs/README.md", "/w/notes.md", nil]))")
             try expect(details(["/w/a/x/README.md", "/w/b/x/README.md"]) == ["a/x", "b/x"], "Shared parent names were not told apart")
             try expect(details(["/elsewhere/one/README.md", "/w/README.md"]) == ["one", "w"], "Files outside the folder were not told apart")
         }
-        if failures > 0 { exit(1) }
+        if failures > 0 {
+            exit(1)
+        }
     }
 }

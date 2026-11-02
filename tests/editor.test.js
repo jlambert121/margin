@@ -42,6 +42,22 @@
     assert(lineText('cm-md-h2') === 'Header', 'New heading did not render after leaving it');
     assert(app.getMarkdown() === 'Intro\n## Header', 'Typing changed the Markdown');
   });
+  await test('ATX closing markers and Setext underlines reveal only while editing', async () => {
+    const text = '## ATX heading ##\n\nSetext heading\n==============\n\nBody.\n';
+    app.load({ text, name: 'Heading styles.md' }); blur(); await tick();
+    assert(lineText('cm-md-h2') === 'ATX heading', 'ATX closing markers were not hidden');
+    assert(lineText('cm-md-h1') === 'Setext heading', 'Setext heading was not styled');
+    assert(lineText('cm-md-setext-underline') === '', 'Setext underline was not hidden');
+    cursorAt(3); await tick();
+    assert(lineText('cm-md-h2') === '## ATX heading ##', 'ATX source was not revealed');
+    cursorAt(text.indexOf('Setext')); await tick();
+    assert(lineText('cm-md-h2') === 'ATX heading', 'ATX source stayed visible after moving away');
+    assert(!document.querySelector('.cm-md-setext-underline'), 'Setext underline stayed hidden while editing');
+    assert($$('.cm-line').some(line => line.textContent === '=============='), 'Setext underline source was not revealed');
+    blur(); await tick();
+    assert(lineText('cm-md-setext-underline') === '', 'Setext underline stayed visible after blur');
+    assert(app.getMarkdown() === text, 'Rendering headings changed the Markdown');
+  });
   await test('Nested lists indent by depth, vary their bullets, and wrap under their text', async () => {
     const long = 'A long item that keeps going so that it wraps onto another line in the editor, '.repeat(4);
     app.load({ text: `- One\n  - Two\n    - Three\n- ${long}\n\n1. First\n   continued line\n`, name: 'Lists.md' }); blur(); await tick();

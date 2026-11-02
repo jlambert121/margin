@@ -1,6 +1,6 @@
-import Foundation
 import CoreGraphics
 import CoreText
+import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -9,8 +9,9 @@ let iconset = URL(fileURLWithPath: CommandLine.arguments[1])
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 let space = CGColorSpaceCreateDeviceRGB()
 func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
-    CGColor(red: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255, blue: CGFloat(hex & 0xff) / 255, alpha: alpha)
+    CGColor(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
 }
+
 let shape = CGPath(roundedRect: CGRect(x: 100, y: 100, width: 824, height: 824), cornerWidth: 185, cornerHeight: 185, transform: nil)
 
 func tile(_ c: CGContext, top: UInt32, bottom: UInt32) {
@@ -22,6 +23,7 @@ func tile(_ c: CGContext, top: UInt32, bottom: UInt32) {
     let gradient = CGGradient(colorsSpace: space, colors: [rgb(top), rgb(bottom)] as CFArray, locations: [0, 1])!
     c.drawLinearGradient(gradient, start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 100), options: [])
 }
+
 func glyph(_ c: CGContext, _ text: String, font: String, size: CGFloat, color: CGColor, center: CGPoint) {
     let attributes: [NSAttributedString.Key: Any] = [kCTFontAttributeName as NSAttributedString.Key: CTFontCreateWithName(font as CFString, size, nil), kCTForegroundColorAttributeName as NSAttributedString.Key: color]
     let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
@@ -43,6 +45,7 @@ func render(_ design: (CGContext) -> Void, size: Int, to url: URL) {
     let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)!
     CGImageDestinationAddImage(destination, context.makeImage()!, nil); CGImageDestinationFinalize(destination)
 }
+
 for size in [16, 32, 128, 256, 512] {
     render(design, size: size, to: iconset.appendingPathComponent("icon_\(size)x\(size).png"))
     render(design, size: size * 2, to: iconset.appendingPathComponent("icon_\(size)x\(size)@2x.png"))

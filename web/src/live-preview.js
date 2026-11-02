@@ -106,6 +106,240 @@
   const listDepth = item => { let depth = 0; for (let node = item.parent; node; node = node.parent) if (node.name === 'BulletList' || node.name === 'OrderedList') depth++; return depth; };
   const inQuote = node => { for (let parent = node.parent; parent; parent = parent.parent) if (parent.name === 'Blockquote') return true; return false; };
 
+  function decorateHeading(node, context, heading) {
+    const { from, to } = node;
+    const { doc, touches, lineTouched, hide, hideWithSpace, lineClass, eachLine, children } = context;
+    const level = heading[2];
+    const marks = children(node, 'HeaderMark');
+    const headingClass = `cm-md-heading cm-md-h${level}`;
+    if (heading[1] === 'Setext') {
+      const underline = doc.lineAt(to);
+      eachLine(from, underline.from - 1, line => lineClass(headingClass, line.from));
+      if (touches(from, to)) return;
+      lineClass('cm-md-setext-underline', underline.from);
+      for (const headerMark of marks) hide(headerMark.from, headerMark.to);
+      return;
+    }
+    lineClass(headingClass, from);
+    if (lineTouched(from)) return;
+    for (const headerMark of marks) {
+      if (headerMark.from === doc.lineAt(from).from) {
+        hideWithSpace(headerMark.from, headerMark.to);
+      } else {
+        const precedingSpace = doc.sliceString(headerMark.from - 1, headerMark.from) === ' ';
+        hide(precedingSpace ? headerMark.from - 1 : headerMark.from, headerMark.to);
+      }
+    }
+  }
+
+  function decorateEmphasis(node, context) {
+    const { name, from, to } = node;
+    const { touches, hide, mark, children } = context;
+    mark({ Emphasis: 'cm-md-em', StrongEmphasis: 'cm-md-strong', Strikethrough: 'cm-md-strike' }[name], from, to);
+    if (!touches(from, to)) for (const marker of children(node, name === 'Strikethrough' ? 'StrikethroughMark' : 'EmphasisMark')) hide(marker.from, marker.to);
+  }
+
+  function decorateInlineCode(node, context) {
+    const { from, to } = node;
+    const { touches, hide, mark, children } = context;
+    mark('cm-md-code', from, to);
+    if (!touches(from, to)) for (const marker of children(node, 'CodeMark')) hide(marker.from, marker.to);
+    return false;
+  }
+
+  function decorateLink(node, context) {
+    const { from, to } = node;
+    const { touches, hide, mark, children } = context;
+    const marks = children(node, 'LinkMark');
+    if (marks.length < 2) return;
+    if (touches(from, to)) mark('cm-md-link-source', from, to);
+    else { hide(from, marks[0].to); hide(marks[1].from, to); mark('cm-md-link', marks[0].to, marks[1].from); }
+  }
+
+  function decorateImage(node, context) {
+    const { from, to } = node;
+    const { doc, touches, add, mark, children } = context;
+    const url = children(node, 'URL')[0];
+    const marks = children(node, 'LinkMark');
+    if (!url || marks.length < 2) return false;
+    const widget = new ImageWidget(doc.sliceString(url.from, url.to).replace(/^<|>$/g, ''), doc.sliceString(marks[0].to, marks[1].from));
+    if (touches(from, to)) { mark('cm-md-link-source', from, to); add(Decoration.widget({ widget, side: 1 }), to); }
+    else add(Decoration.replace({ widget }), from, to);
+    return false;
+  }
+
+  function decorateAutolink(node, context) {
+    const { from, to } = node;
+    const { touches, hide, mark, children } = context;
+    mark('cm-md-link', from, to);
+    if (!touches(from, to)) for (const marker of children(node, 'LinkMark')) hide(marker.from, marker.to);
+    return false;
+  }
+
+  function decorateURL(node, context) {
+    const { from, to } = node;
+    const { mark } = context;
+    if (node.node.parent?.name !== 'Link') mark('cm-md-link', from, to);
+    return false;
+  }
+
+  function decorateBlockquote(node, context) {
+    const { from, to } = node;
+    const { lineClass, eachLine } = context;
+    eachLine(from, to, line => lineClass('cm-md-quote', line.from));
+  }
+
+  function decorateQuoteMark(node, context) {
+    const { from, to } = node;
+    const { lineTouched, hideWithSpace } = context;
+    if (!lineTouched(from)) hideWithSpace(from, to);
+  }
+
+  function decorateListItem(node, context) {
+    const { from } = node;
+    const { doc, listLines } = context;
+    if (!inQuote(node.node)) listLines.set(doc.lineAt(from).from, { depth: listDepth(node.node), first: true });
+  }
+
+  function decorateParagraph(node, context) {
+    const { from, to } = node;
+    const { doc, lineTouched, hide, eachLine, listLines } = context;
+    const item = node.node.parent;
+    if (item?.name !== 'ListItem' || inQuote(item)) return;
+    const depth = listDepth(item), itemLine = doc.lineAt(item.from).number;
+    eachLine(from, to, line => {
+      if (line.number === itemLine) return;
+      listLines.set(line.from, { depth, first: false });
+      const lead = /^[ \t]+/.exec(line.text);
+      if (lead && !lineTouched(line.from)) hide(line.from, line.from + lead[0].length);
+    });
+  }
+
+  // The replacement marker includes the following space so wrapped text stays aligned.
+  function decorateListMark(node, context) {
+    const { from, to } = node;
+    const { doc, lineTouched, add, hide, mark, spaceAfter } = context;
+    const item = node.node.parent;
+    if (item?.name !== 'ListItem' || lineTouched(from)) return;
+    const line = doc.lineAt(from);
+    if (/^[ \t]+$/.test(doc.sliceString(line.from, from))) hide(line.from, from);
+    if (item.getChild('Task')) hide(from, spaceAfter(to));
+    else if (item.parent?.name === 'BulletList') add(Decoration.replace({ widget: bullets[(listDepth(item) - 1) % bullets.length] }), from, spaceAfter(to));
+    else { mark('cm-md-list-number', from, to); hide(to, spaceAfter(to)); }
+  }
+
+  function decorateTaskMarker(node, context) {
+    const { from, to } = node;
+    const { doc, touches, add, mark, spaceAfter } = context;
+    const checked = /x/i.test(doc.sliceString(from, to));
+    if (checked) mark('cm-md-task-done', to, node.node.parent?.to ?? to);
+    if (!touches(from, to)) add(Decoration.replace({ widget: new CheckboxWidget(checked) }), from, spaceAfter(to));
+  }
+
+  function decorateHorizontalRule(node, context) {
+    const { from, to } = node;
+    const { lineTouched, add } = context;
+    if (!lineTouched(from)) add(Decoration.replace({ widget: rule }), from, to);
+    return false;
+  }
+
+  function decorateFencedCode(node, context) {
+    const { from, to } = node;
+    const { doc, touches, add, hide, lineClass, eachLine, children } = context;
+    const first = doc.lineAt(from), last = doc.lineAt(to);
+    const info = children(node, 'CodeInfo')[0];
+    let label = info ? doc.sliceString(info.from, info.to) : '';
+    const closed = last.number > first.number && /^\s*(```|~~~)/.test(last.text);
+    if (closed && !touches(from, to) && MarginMarkdown.isMermaid(label)) {
+      const code = children(node, 'CodeText')[0];
+      const diagram = MarginMarkdown.renderDiagram(code ? doc.sliceString(code.from, code.to) : '', { links: false });
+      if (diagram.svg) { add(Decoration.replace({ widget: new DiagramWidget(diagram.svg), block: true }), first.from, last.to); return false; }
+      label = `${label} · ${diagram.error}`;
+    }
+    eachLine(from, to, line => lineClass('cm-md-codeblock', line.from));
+    lineClass('cm-md-codeblock-first', first.from);
+    lineClass('cm-md-codeblock-last', last.from);
+    if (!touches(from, to)) {
+      add(Decoration.replace(label ? { widget: new FenceLabelWidget(label) } : {}), first.from, first.to);
+      if (closed) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
+      if (!label) lineClass('cm-md-fence-hidden', first.from);
+    }
+    return false;
+  }
+
+  // Metadata keeps its source visible while the selection touches the block.
+  function decorateFrontmatter(node, context) {
+    const { from, to } = node;
+    const { doc, touches, add, hide, lineClass, eachLine, children } = context;
+    const first = doc.lineAt(from), last = doc.lineAt(to);
+    eachLine(from, to, line => lineClass('cm-md-codeblock cm-md-frontmatter', line.from));
+    lineClass('cm-md-codeblock-first', first.from);
+    lineClass('cm-md-codeblock-last', last.from);
+    if (!touches(from, to)) {
+      add(Decoration.replace({ widget: new FenceLabelWidget('front matter') }), first.from, first.to);
+      if (children(node, 'FrontmatterMark').length > 1) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
+    }
+    return false;
+  }
+
+  function decorateCodeBlock(node, context) {
+    const { from, to } = node;
+    const { lineClass, eachLine } = context;
+    eachLine(from, to, line => lineClass('cm-md-codeblock cm-md-indented-code', line.from));
+    return false;
+  }
+
+  function decorateTable(node, context) {
+    const { from, to } = node;
+    const { state, doc, add, lineClass, eachLine } = context;
+    const first = doc.lineAt(from), last = doc.lineAt(to);
+    if (state.field(MarginTables.sourceTables).includes(first.from)) eachLine(from, to, line => lineClass('cm-md-table-source', line.from));
+    else add(Decoration.replace({ widget: new MarginTables.TableWidget(doc.sliceString(first.from, last.to)), block: true }), first.from, last.to);
+    return false;
+  }
+
+  function decorateEscape(node, context) {
+    const { from, to } = node;
+    const { touches, hide } = context;
+    if (!touches(from, to)) hide(from, from + 1);
+    return false;
+  }
+
+  function decorateHTMLTag(node, context) {
+    const { from, to } = node;
+    const { mark } = context;
+    mark('cm-md-html', from, to);
+    return false;
+  }
+
+  // A false return skips child nodes whose syntax is already handled by the parent.
+  const nodeDecorators = {
+    Emphasis: decorateEmphasis,
+    StrongEmphasis: decorateEmphasis,
+    Strikethrough: decorateEmphasis,
+    InlineCode: decorateInlineCode,
+    Link: decorateLink,
+    Image: decorateImage,
+    Autolink: decorateAutolink,
+    URL: decorateURL,
+    Blockquote: decorateBlockquote,
+    QuoteMark: decorateQuoteMark,
+    ListItem: decorateListItem,
+    Paragraph: decorateParagraph,
+    ListMark: decorateListMark,
+    TaskMarker: decorateTaskMarker,
+    HorizontalRule: decorateHorizontalRule,
+    FencedCode: decorateFencedCode,
+    Frontmatter: decorateFrontmatter,
+    CodeBlock: decorateCodeBlock,
+    Table: decorateTable,
+    Escape: decorateEscape,
+    HTMLTag: decorateHTMLTag,
+    HTMLBlock: decorateHTMLTag,
+    Comment: decorateHTMLTag,
+    CommentBlock: decorateHTMLTag,
+  };
+
   function decorate(state) {
     const doc = state.doc;
     const tree = ensureSyntaxTree(state, doc.length, 200) ?? syntaxTree(state);
@@ -126,159 +360,11 @@
     // hidden like other syntax. Keyed by line start; quoted lists keep the quote's layout.
     const listLines = new Map();
 
+    const context = { state, doc, touches, lineTouched, add, hide, hideWithSpace, mark, lineClass, eachLine, children, spaceAfter, listLines };
     tree.iterate({ enter(node) {
-      const { name, from, to } = node;
-      const heading = /^(ATX|Setext)Heading(\d)$/.exec(name);
-      if (heading) {
-        const level = heading[2];
-        const marks = children(node, 'HeaderMark');
-        if (heading[1] === 'ATX') {
-          lineClass(`cm-md-heading cm-md-h${level}`, from);
-          if (!lineTouched(from)) for (const headerMark of marks) {
-            if (headerMark.from === doc.lineAt(from).from) hideWithSpace(headerMark.from, headerMark.to);
-            else hide(doc.sliceString(headerMark.from - 1, headerMark.from) === ' ' ? headerMark.from - 1 : headerMark.from, headerMark.to);
-          }
-        } else {
-          const underline = doc.lineAt(to);
-          eachLine(from, underline.from - 1, line => lineClass(`cm-md-heading cm-md-h${level}`, line.from));
-          if (!touches(from, to)) { lineClass('cm-md-setext-underline', underline.from); for (const headerMark of marks) hide(headerMark.from, headerMark.to); }
-        }
-        return;
-      }
-      switch (name) {
-        case 'Emphasis': case 'StrongEmphasis': case 'Strikethrough': {
-          mark({ Emphasis: 'cm-md-em', StrongEmphasis: 'cm-md-strong', Strikethrough: 'cm-md-strike' }[name], from, to);
-          if (!touches(from, to)) for (const marker of children(node, name === 'Strikethrough' ? 'StrikethroughMark' : 'EmphasisMark')) hide(marker.from, marker.to);
-          return;
-        }
-        case 'InlineCode': {
-          mark('cm-md-code', from, to);
-          if (!touches(from, to)) for (const marker of children(node, 'CodeMark')) hide(marker.from, marker.to);
-          return false;
-        }
-        case 'Link': {
-          const marks = children(node, 'LinkMark');
-          if (marks.length < 2) return;
-          if (touches(from, to)) mark('cm-md-link-source', from, to);
-          else { hide(from, marks[0].to); hide(marks[1].from, to); mark('cm-md-link', marks[0].to, marks[1].from); }
-          return;
-        }
-        case 'Image': {
-          const url = children(node, 'URL')[0];
-          const marks = children(node, 'LinkMark');
-          if (!url || marks.length < 2) return false;
-          const widget = new ImageWidget(doc.sliceString(url.from, url.to).replace(/^<|>$/g, ''), doc.sliceString(marks[0].to, marks[1].from));
-          if (touches(from, to)) { mark('cm-md-link-source', from, to); add(Decoration.widget({ widget, side: 1 }), to); }
-          else add(Decoration.replace({ widget }), from, to);
-          return false;
-        }
-        case 'Autolink': {
-          mark('cm-md-link', from, to);
-          if (!touches(from, to)) for (const marker of children(node, 'LinkMark')) hide(marker.from, marker.to);
-          return false;
-        }
-        case 'URL': {
-          if (node.node.parent?.name !== 'Link') mark('cm-md-link', from, to);
-          return false;
-        }
-        case 'Blockquote': {
-          eachLine(from, to, line => lineClass('cm-md-quote', line.from));
-          return;
-        }
-        case 'QuoteMark': {
-          if (!lineTouched(from)) hideWithSpace(from, to);
-          return;
-        }
-        case 'ListItem': {
-          if (!inQuote(node.node)) listLines.set(doc.lineAt(from).from, { depth: listDepth(node.node), first: true });
-          return;
-        }
-        case 'Paragraph': {
-          const item = node.node.parent;
-          if (item?.name !== 'ListItem' || inQuote(item)) return;
-          const depth = listDepth(item), itemLine = doc.lineAt(item.from).number;
-          eachLine(from, to, line => {
-            if (line.number === itemLine) return;
-            listLines.set(line.from, { depth, first: false });
-            const lead = /^[ \t]+/.exec(line.text);
-            if (lead && !lineTouched(line.from)) hide(line.from, line.from + lead[0].length);
-          });
-          return;
-        }
-        // The marker takes a fixed width, standing in for the space after it, so
-        // wrapped lines can line up with the item's text.
-        case 'ListMark': {
-          const item = node.node.parent;
-          if (item?.name !== 'ListItem' || lineTouched(from)) return;
-          const line = doc.lineAt(from);
-          if (/^[ \t]+$/.test(doc.sliceString(line.from, from))) hide(line.from, from);
-          if (item.getChild('Task')) hide(from, spaceAfter(to));
-          else if (item.parent?.name === 'BulletList') add(Decoration.replace({ widget: bullets[(listDepth(item) - 1) % bullets.length] }), from, spaceAfter(to));
-          else { mark('cm-md-list-number', from, to); hide(to, spaceAfter(to)); }
-          return;
-        }
-        case 'TaskMarker': {
-          const checked = /x/i.test(doc.sliceString(from, to));
-          if (checked) mark('cm-md-task-done', to, node.node.parent?.to ?? to);
-          if (!touches(from, to)) add(Decoration.replace({ widget: new CheckboxWidget(checked) }), from, spaceAfter(to));
-          return;
-        }
-        case 'HorizontalRule': {
-          if (!lineTouched(from)) add(Decoration.replace({ widget: rule }), from, to);
-          return false;
-        }
-        case 'FencedCode': {
-          const first = doc.lineAt(from), last = doc.lineAt(to);
-          const info = children(node, 'CodeInfo')[0];
-          let label = info ? doc.sliceString(info.from, info.to) : '';
-          const closed = last.number > first.number && /^\s*(```|~~~)/.test(last.text);
-          if (closed && !touches(from, to) && MarginMarkdown.isMermaid(label)) {
-            const code = children(node, 'CodeText')[0];
-            const diagram = MarginMarkdown.renderDiagram(code ? doc.sliceString(code.from, code.to) : '', { links: false });
-            if (diagram.svg) { add(Decoration.replace({ widget: new DiagramWidget(diagram.svg), block: true }), first.from, last.to); return false; }
-            label = `${label} · ${diagram.error}`;
-          }
-          eachLine(from, to, line => lineClass('cm-md-codeblock', line.from));
-          lineClass('cm-md-codeblock-first', first.from);
-          lineClass('cm-md-codeblock-last', last.from);
-          if (!touches(from, to)) {
-            add(Decoration.replace(label ? { widget: new FenceLabelWidget(label) } : {}), first.from, first.to);
-            if (closed) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
-            if (!label) lineClass('cm-md-fence-hidden', first.from);
-          }
-          return false;
-        }
-        // Shown as a labeled metadata block, with its "---" lines as source while the cursor is in it.
-        case 'Frontmatter': {
-          const first = doc.lineAt(from), last = doc.lineAt(to);
-          eachLine(from, to, line => lineClass('cm-md-codeblock cm-md-frontmatter', line.from));
-          lineClass('cm-md-codeblock-first', first.from);
-          lineClass('cm-md-codeblock-last', last.from);
-          if (!touches(from, to)) {
-            add(Decoration.replace({ widget: new FenceLabelWidget('front matter') }), first.from, first.to);
-            if (children(node, 'FrontmatterMark').length > 1) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
-          }
-          return false;
-        }
-        case 'CodeBlock': {
-          eachLine(from, to, line => lineClass('cm-md-codeblock cm-md-indented-code', line.from));
-          return false;
-        }
-        case 'Table': {
-          const first = doc.lineAt(from), last = doc.lineAt(to);
-          if (state.field(MarginTables.sourceTables).includes(first.from)) eachLine(from, to, line => lineClass('cm-md-table-source', line.from));
-          else add(Decoration.replace({ widget: new MarginTables.TableWidget(doc.sliceString(first.from, last.to)), block: true }), first.from, last.to);
-          return false;
-        }
-        case 'Escape': {
-          if (!touches(from, to)) hide(from, from + 1);
-          return false;
-        }
-        case 'HTMLTag': case 'HTMLBlock': case 'Comment': case 'CommentBlock': {
-          mark('cm-md-html', from, to);
-          return false;
-        }
-      }
+      const heading = /^(ATX|Setext)Heading(\d)$/.exec(node.name);
+      if (heading) return decorateHeading(node, context, heading);
+      return nodeDecorators[node.name]?.(node, context);
     } });
     for (const [pos, { depth, first }] of listLines) {
       add(Decoration.line({ class: first ? 'cm-md-list-line' : 'cm-md-list-line cm-md-list-continuation', attributes: { style: `--list-depth:${depth - 1}` } }), pos);

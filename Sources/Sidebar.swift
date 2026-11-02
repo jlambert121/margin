@@ -11,40 +11,80 @@ struct HeadingEntry: Equatable {
     let level: Int, text: String, pos: Int
 }
 
-// A workspace folder or Markdown file; files have no children.
-struct FolderEntry: Equatable {
-    let name: String, path: String
-    let children: [FolderEntry]?
-}
-
 enum SidebarMode: Int { case files, outline }
 
 extension Notification.Name {
     static let sidebarStateChanged = Notification.Name("Margin.sidebarStateChanged")
 }
 
-// A window's sidebar layout and navigation, which stay as they are while switching documents.
+/// A window's sidebar layout and navigation, which stay as they are while switching documents.
 final class SidebarState {
-    var collapsed: Bool { didSet { if collapsed != oldValue { defaults.set(collapsed, forKey: "sidebarCollapsed"); changed() } } }
-    var width: CGFloat { didSet { if abs(width - oldValue) > 0.5 { defaults.set(Double(width), forKey: "sidebarWidth"); changed() } } }
-    var mode: SidebarMode = .files { didSet { if mode != oldValue { changed() } } }
-    var filter = "" { didSet { if filter != oldValue { changed() } } }
-    // Top-level folders start open and nested ones closed; these paths are the exceptions.
-    var toggledFolders: Set<String> = [] { didSet { if toggledFolders != oldValue { changed() } } }
+    var collapsed: Bool {
+        didSet {
+            if collapsed != oldValue {
+                defaults.set(collapsed, forKey: "sidebarCollapsed"); changed()
+            }
+        }
+    }
+
+    var width: CGFloat {
+        didSet {
+            if abs(width - oldValue) > 0.5 {
+                defaults.set(Double(width), forKey: "sidebarWidth"); changed()
+            }
+        }
+    }
+
+    var mode: SidebarMode = .files {
+        didSet {
+            if mode != oldValue {
+                changed()
+            }
+        }
+    }
+
+    var filter = "" {
+        didSet {
+            if filter != oldValue {
+                changed()
+            }
+        }
+    }
+
+    /// Top-level folders start open and nested ones closed; these paths are the exceptions.
+    var toggledFolders: Set<String> = [] {
+        didSet {
+            if toggledFolders != oldValue {
+                changed()
+            }
+        }
+    }
+
     private let defaults: UserDefaults
 
-    // New windows start from the last collapsed state and width.
+    /// New windows start from the last collapsed state and width.
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         collapsed = defaults.bool(forKey: "sidebarCollapsed")
         let stored = defaults.double(forKey: "sidebarWidth")
         width = stored > 0 ? CGFloat(stored) : SidebarViewController.defaultWidth
     }
-    func isExpanded(_ folder: FolderEntry, depth: Int) -> Bool { (depth == 0) != toggledFolders.contains(folder.path) }
-    func setExpanded(_ expanded: Bool, folder: FolderEntry, depth: Int) {
-        if expanded == (depth == 0) { toggledFolders.remove(folder.path) } else { toggledFolders.insert(folder.path) }
+
+    func isExpanded(_ folder: FolderEntry, depth: Int) -> Bool {
+        (depth == 0) != toggledFolders.contains(folder.path)
     }
-    private func changed() { NotificationCenter.default.post(name: .sidebarStateChanged, object: self) }
+
+    func setExpanded(_ expanded: Bool, folder: FolderEntry, depth: Int) {
+        if expanded == (depth == 0) {
+            toggledFolders.remove(folder.path)
+        } else {
+            toggledFolders.insert(folder.path)
+        }
+    }
+
+    private func changed() {
+        NotificationCenter.default.post(name: .sidebarStateChanged, object: self)
+    }
 }
 
 final class SidebarNode {
@@ -56,20 +96,27 @@ final class SidebarNode {
         case message(String)
         case openFolderPrompt
     }
+
     let kind: Kind
     var children: [SidebarNode]
-    init(_ kind: Kind, children: [SidebarNode] = []) { self.kind = kind; self.children = children }
+    init(_ kind: Kind, children: [SidebarNode] = []) {
+        self.kind = kind; self.children = children
+    }
+
     var isSelectable: Bool {
         switch kind { case .openFile, .file, .folder: return true; default: return false }
     }
 }
 
-// Selected rows in the app's green rather than the system accent. The row stays
-// emphasized so AppKit keeps its text white; inactive windows get a dimmer green
-// instead of the gray that would come with accent-tinted text.
+/// Selected rows in the app's green rather than the system accent. The row stays
+/// emphasized so AppKit keeps its text white; inactive windows get a dimmer green
+/// instead of the gray that would come with accent-tinted text.
 final class SidebarRowView: NSTableRowView {
-    override var isEmphasized: Bool { get { true } set { needsDisplay = true } }
-    override func drawSelection(in dirtyRect: NSRect) {
+    override var isEmphasized: Bool {
+        get { true } set { needsDisplay = true }
+    }
+
+    override func drawSelection(in _: NSRect) {
         guard selectionHighlightStyle != .none else { return }
         let active = window?.isKeyWindow == true
         SidebarViewController.selection.withAlphaComponent(active ? 1 : 0.6).setFill()
@@ -82,12 +129,20 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private static let openFileType = NSPasteboard.PasteboardType("com.infiniteviewtech.margin.open-file")
     static let accent = NSColor(name: "MarginAccent") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0xa2 / 255, green: 0xb9 / 255, blue: 0x9a / 255, alpha: 1)
+            ? NSColor(srgbRed: 0xA2 / 255, green: 0xB9 / 255, blue: 0x9A / 255, alpha: 1)
             : NSColor(srgbRed: 0x53 / 255, green: 0x74 / 255, blue: 0x60 / 255, alpha: 1)
     }
+
     // The darker accent in both appearances keeps white text on it readable.
     static let selection = NSColor(srgbRed: 0x53 / 255, green: 0x74 / 255, blue: 0x60 / 255, alpha: 1)
-    var state = SidebarState() { didSet { if state !== oldValue { appliedTree = nil; observeState(); applyState() } } }
+    var state = SidebarState() {
+        didSet {
+            if state !== oldValue {
+                appliedTree = nil; observeState(); applyState()
+            }
+        }
+    }
+
     var onSelectOpenFile: (String) -> Void = { _ in }
     var onCloseOpenFile: (String) -> Void = { _ in }
     // An open file's id and its new position among the open files.
@@ -105,7 +160,13 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private(set) var openFiles: [OpenFileEntry] = []
     private(set) var folder: FolderEntry?
     private(set) var headings: [HeadingEntry] = []
-    var currentPath = "" { didSet { if currentPath != oldValue { reloadFiles() } } }
+    var currentPath = "" {
+        didSet {
+            if currentPath != oldValue {
+                reloadFiles()
+            }
+        }
+    }
 
     let modeControl = NSSegmentedControl(labels: ["Files", "Outline"], trackingMode: .selectOne, target: nil, action: nil)
     let filterField = NSSearchField()
@@ -116,13 +177,17 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private let outlineScroll = NSScrollView()
     private let outlineEmpty = NSTextField(wrappingLabelWithString: "Add a heading to give your words a little structure.")
     private var roots: [SidebarNode] = []
-    // Set while the tree and the state are brought in line, so neither change echoes back into the other.
+    /// Set while the tree and the state are brought in line, so neither change echoes back into the other.
     private var syncingTree = false
     // The filter and opened folders the tree shows.
     private var appliedTree: (filter: String, toggled: Set<String>)?
     private var stateObserver: NSObjectProtocol?
 
-    deinit { if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) } }
+    deinit {
+        if let stateObserver {
+            NotificationCenter.default.removeObserver(stateObserver)
+        }
+    }
 
     override func loadView() {
         let view = NSView(frame: NSRect(x: 0, y: 0, width: Self.defaultWidth, height: 600))
@@ -200,7 +265,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             footer.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
             filesScroll.widthAnchor.constraint(equalTo: filesStack.widthAnchor),
             outlineScroll.widthAnchor.constraint(equalTo: outlineStack.widthAnchor),
-            outlineEmpty.widthAnchor.constraint(equalTo: outlineStack.widthAnchor)
+            outlineEmpty.widthAnchor.constraint(equalTo: outlineStack.widthAnchor),
         ])
         for part in [brand, modeControl, filesStack, outlineStack, footer] {
             let inset: CGFloat = part === filesStack || part === outlineStack ? 4 : 14
@@ -220,10 +285,12 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         guard files != openFiles else { return }
         openFiles = files; reloadFiles()
     }
+
     func setFolder(_ entry: FolderEntry?) {
         guard entry != folder else { return }
         folder = entry; reloadFiles()
     }
+
     func setHeadings(_ entries: [HeadingEntry]) {
         guard entries != headings else { return }
         headings = entries
@@ -235,17 +302,24 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     // MARK: State
 
     private func observeState() {
-        if let stateObserver { NotificationCenter.default.removeObserver(stateObserver) }
+        if let stateObserver {
+            NotificationCenter.default.removeObserver(stateObserver)
+        }
         stateObserver = NotificationCenter.default.addObserver(forName: .sidebarStateChanged, object: state, queue: .main) { [weak self] _ in self?.applyState() }
     }
+
     private func applyState() {
         guard isViewLoaded else { return }
         modeControl.selectedSegment = state.mode.rawValue
         view.subviews.first { $0.identifier?.rawValue == "files" }?.isHidden = state.mode != .files
         view.subviews.first { $0.identifier?.rawValue == "outline" }?.isHidden = state.mode != .outline
-        if filterField.stringValue != state.filter { filterField.stringValue = state.filter }
+        if filterField.stringValue != state.filter {
+            filterField.stringValue = state.filter
+        }
         // Width and collapsing are in the state too, and change on every step of a divider drag.
-        if !syncingTree, appliedTree.map({ $0.filter != state.filter || $0.toggled != state.toggledFolders }) ?? true { reloadFiles() }
+        if !syncingTree, appliedTree.map({ $0.filter != state.filter || $0.toggled != state.toggledFolders }) ?? true {
+            reloadFiles()
+        }
         outlineEmpty.isHidden = !headings.isEmpty
     }
 
@@ -282,21 +356,36 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
                 guard open || holdsOpenFolder(node) else { continue }
                 filesView.expandItem(node)
                 expand(node.children)
-                if !open { filesView.collapseItem(node) }
+                if !open {
+                    filesView.collapseItem(node)
+                }
             }
         }
         func holdsOpenFolder(_ node: SidebarNode) -> Bool {
-            node.children.contains { if case let .folder(entry, depth) = $0.kind { return state.isExpanded(entry, depth: depth) || holdsOpenFolder($0) }; return false }
+            node.children.contains {
+                if case let .folder(entry, depth) = $0.kind {
+                    return state.isExpanded(entry, depth: depth) || holdsOpenFolder($0)
+                }; return false
+            }
         }
         expand(roots)
         syncingTree = false
         selectCurrentFile()
     }
+
     private func selectCurrentFile() {
-        let current = roots.firstIndex { if case let .openFile(file) = $0.kind { return file.current }; return false }
-        if let current { filesView.selectRowIndexes(IndexSet(integer: filesView.row(forItem: roots[current])), byExtendingSelection: false) }
-        else { filesView.deselectAll(nil) }
+        let current = roots.firstIndex {
+            if case let .openFile(file) = $0.kind {
+                return file.current
+            }; return false
+        }
+        if let current {
+            filesView.selectRowIndexes(IndexSet(integer: filesView.row(forItem: roots[current])), byExtendingSelection: false)
+        } else {
+            filesView.deselectAll(nil)
+        }
     }
+
     private static func tree(_ entries: [FolderEntry], depth: Int, query: String) -> [SidebarNode] {
         entries.compactMap { entry in
             if let children = entry.children {
@@ -306,13 +395,32 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             return query.isEmpty || entry.name.lowercased().contains(query) ? SidebarNode(.file(entry)) : nil
         }
     }
-    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int { (item as? SidebarNode)?.children.count ?? roots.count }
-    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any { (item as? SidebarNode)?.children[index] ?? roots[index] }
-    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool { !((item as? SidebarNode)?.children.isEmpty ?? true) }
-    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? { SidebarRowView() }
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { SidebarRowView() }
-    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { (item as? SidebarNode)?.isSelectable == true }
-    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
+
+    func outlineView(_: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        (item as? SidebarNode)?.children.count ?? roots.count
+    }
+
+    func outlineView(_: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        (item as? SidebarNode)?.children[index] ?? roots[index]
+    }
+
+    func outlineView(_: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        !((item as? SidebarNode)?.children.isEmpty ?? true)
+    }
+
+    func outlineView(_: NSOutlineView, rowViewForItem _: Any) -> NSTableRowView? {
+        SidebarRowView()
+    }
+
+    func tableView(_: NSTableView, rowViewForRow _: Int) -> NSTableRowView? {
+        SidebarRowView()
+    }
+
+    func outlineView(_: NSOutlineView, shouldSelectItem item: Any) -> Bool {
+        (item as? SidebarNode)?.isSelectable == true
+    }
+
+    func outlineView(_: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         switch (item as? SidebarNode)?.kind {
         case .openFolderPrompt: return 92
         case .message: return 40
@@ -321,42 +429,60 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         default: return 26
         }
     }
-    // Open files reorder by dragging within their section.
-    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+
+    /// Open files reorder by dragging within their section.
+    func outlineView(_: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard case let .openFile(file) = (item as? SidebarNode)?.kind else { return nil }
         let writer = NSPasteboardItem()
         writer.setString(file.id, forType: Self.openFileType)
         return writer
     }
+
     func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
         guard info.draggingPasteboard.string(forType: Self.openFileType) != nil, !openFiles.isEmpty else { return [] }
         // Root rows are the Open Files header, then the open files.
         let position = item == nil && index >= 1 ? min(index, openFiles.count + 1) : (index < 1 ? 1 : openFiles.count + 1)
-        if item != nil || position != index { outlineView.setDropItem(nil, dropChildIndex: position) }
+        if item != nil || position != index {
+            outlineView.setDropItem(nil, dropChildIndex: position)
+        }
         return .move
     }
-    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+
+    func outlineView(_: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
         guard let id = info.draggingPasteboard.string(forType: Self.openFileType), item == nil, index >= 1 else { return false }
         onMoveOpenFile(id, min(index - 1, openFiles.count))
         return true
     }
-    func outlineViewItemDidExpand(_ notification: Notification) { folderToggled(notification, expanded: true) }
-    func outlineViewItemDidCollapse(_ notification: Notification) { folderToggled(notification, expanded: false) }
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        folderToggled(notification, expanded: true)
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        folderToggled(notification, expanded: false)
+    }
+
     private func folderToggled(_ notification: Notification, expanded: Bool) {
         guard !syncingTree, state.filter.isEmpty, let node = notification.userInfo?["NSObject"] as? SidebarNode,
               case let .folder(entry, depth) = node.kind else { return }
         // AppKit reports the open folders inside a collapsing folder as collapsing too, and as expanding when it
         // reopens; only the folder toggled is remembered, unless Option closed the ones inside it as well.
-        if let parent = filesView.parent(forItem: node), !filesView.isItemExpanded(parent), expanded || !optionClicked { return }
+        if let parent = filesView.parent(forItem: node), !filesView.isItemExpanded(parent), expanded || !optionClicked {
+            return
+        }
         // The view already shows the change, and AppKit is still walking its rows, so the tree is not rebuilt.
         syncingTree = true
         state.setExpanded(expanded, folder: entry, depth: depth)
         syncingTree = false
         appliedTree = (state.filter, state.toggledFolders)
     }
-    // Option-clicking a folder also opens or closes the folders inside it, as on the disclosure triangle.
-    private var optionClicked: Bool { NSApp?.currentEvent?.modifierFlags.contains(.option) == true }
-    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
+
+    /// Option-clicking a folder also opens or closes the folders inside it, as on the disclosure triangle.
+    private var optionClicked: Bool {
+        NSApp?.currentEvent?.modifierFlags.contains(.option) == true
+    }
+
+    func outlineView(_: NSOutlineView, viewFor _: NSTableColumn?, item: Any) -> NSView? {
         guard let node = item as? SidebarNode else { return nil }
         switch node.kind {
         case let .header(title, refresh):
@@ -396,7 +522,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             return row([icon("folder"), name(entry.name)])
         case let .file(entry):
             let label = name(entry.name)
-            if entry.path == currentPath { label.textColor = Self.accent; label.font = .systemFont(ofSize: 13, weight: .medium) }
+            if entry.path == currentPath {
+                label.textColor = Self.accent; label.font = .systemFont(ofSize: 13, weight: .medium)
+            }
             let cell = row([icon("doc.text"), label]); cell.toolTip = entry.path
             return cell
         case let .message(text):
@@ -413,6 +541,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             return stack
         }
     }
+
     private func row(_ views: [NSView]) -> NSTableCellView {
         let cell = NSTableCellView()
         let stack = NSStackView(views: views)
@@ -421,17 +550,21 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         cell.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
-        if let label = views.first(where: { $0 is NSTextField }) as? NSTextField { cell.textField = label; label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
+        if let label = views.first(where: { $0 is NSTextField }) as? NSTextField {
+            cell.textField = label; label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
         return cell
     }
+
     private func icon(_ symbol: String) -> NSImageView {
         let view = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
         view.contentTintColor = .secondaryLabelColor
         view.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
         return view
     }
+
     private func name(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 13); label.lineBreakMode = .byTruncatingMiddle
@@ -440,11 +573,16 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: Outline list
 
-    func numberOfRows(in tableView: NSTableView) -> Int { headings.count }
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row index: Int) -> NSView? {
+    func numberOfRows(in _: NSTableView) -> Int {
+        headings.count
+    }
+
+    func tableView(_: NSTableView, viewFor _: NSTableColumn?, row index: Int) -> NSView? {
         let heading = headings[index]
         let label = name(heading.text); label.lineBreakMode = .byTruncatingTail; label.toolTip = heading.text
-        if heading.level == 1 { label.font = .systemFont(ofSize: 13, weight: .semibold) }
+        if heading.level == 1 {
+            label.font = .systemFont(ofSize: 13, weight: .semibold)
+        }
         let cell = row([label])
         (cell.subviews.first as? NSStackView)?.edgeInsets.left = CGFloat(heading.level - 1) * 12
         return cell
@@ -452,34 +590,73 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: Actions
 
-    // Rows act on click; selection only marks the current tab.
-    @objc private func filesClicked(_ sender: Any?) { if filesView.clickedRow >= 0 { activateFile(row: filesView.clickedRow) } }
+    /// Rows act on click; selection only marks the current tab.
+    @objc private func filesClicked(_: Any?) {
+        if filesView.clickedRow >= 0 {
+            activateFile(row: filesView.clickedRow)
+        }
+    }
+
     func activateFile(row: Int) {
         guard let node = filesView.item(atRow: row) as? SidebarNode else { return }
         switch node.kind {
         case let .openFile(file): onSelectOpenFile(file.id)
         case let .file(entry): onOpenPath(entry.path)
         case .folder:
-            if filesView.isItemExpanded(node) { filesView.collapseItem(node, collapseChildren: optionClicked) } else { filesView.expandItem(node, expandChildren: optionClicked) }
+            if filesView.isItemExpanded(node) {
+                filesView.collapseItem(node, collapseChildren: optionClicked)
+            } else {
+                filesView.expandItem(node, expandChildren: optionClicked)
+            }
         default: break
         }
         DispatchQueue.main.async { [weak self] in self?.selectCurrentFile() }
     }
-    @objc private func outlineClicked(_ sender: Any?) { activateHeading(row: outlineView.clickedRow) }
+
+    @objc private func outlineClicked(_: Any?) {
+        activateHeading(row: outlineView.clickedRow)
+    }
+
     func activateHeading(row: Int) {
         guard headings.indices.contains(row) else { return }
         onReveal(headings[row].pos)
         outlineView.deselectAll(nil)
     }
-    @objc private func closeClicked(_ sender: NSButton) { if let id = sender.identifier?.rawValue { onCloseOpenFile(id) } }
-    @objc private func modeChanged(_ sender: NSSegmentedControl) { state.mode = SidebarMode(rawValue: sender.selectedSegment) ?? .files }
-    @objc private func toggleClicked(_ sender: Any?) { onAction("toggleSidebar") }
-    @objc private func refreshClicked(_ sender: Any?) { onAction("refreshFolder") }
-    @objc private func openFolderClicked(_ sender: Any?) { onAction("openFolder") }
-    @objc private func newClicked(_ sender: Any?) { onAction("new") }
-    @objc private func openClicked(_ sender: Any?) { onAction("open") }
+
+    @objc private func closeClicked(_ sender: NSButton) {
+        if let id = sender.identifier?.rawValue {
+            onCloseOpenFile(id)
+        }
+    }
+
+    @objc private func modeChanged(_ sender: NSSegmentedControl) {
+        state.mode = SidebarMode(rawValue: sender.selectedSegment) ?? .files
+    }
+
+    @objc private func toggleClicked(_: Any?) {
+        onAction("toggleSidebar")
+    }
+
+    @objc private func refreshClicked(_: Any?) {
+        onAction("refreshFolder")
+    }
+
+    @objc private func openFolderClicked(_: Any?) {
+        onAction("openFolder")
+    }
+
+    @objc private func newClicked(_: Any?) {
+        onAction("new")
+    }
+
+    @objc private func openClicked(_: Any?) {
+        onAction("open")
+    }
+
     func controlTextDidChange(_ notification: Notification) {
-        if notification.object as? NSSearchField === filterField { state.filter = filterField.stringValue }
+        if notification.object as? NSSearchField === filterField {
+            state.filter = filterField.stringValue
+        }
     }
 
     // MARK: New file and rename
@@ -493,7 +670,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         }
         switch node.kind {
         case let .header(_, workspace) where workspace:
-            if let folder { add("New File") { [weak self] in self?.onNewFile(folder.path) } }
+            if let folder {
+                add("New File") { [weak self] in self?.onNewFile(folder.path) }
+            }
         case let .folder(entry, _):
             add("New File") { [weak self] in self?.onNewFile(entry.path) }
             menu.addItem(.separator())
@@ -506,14 +685,20 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         default: break
         }
     }
-    @objc private func runMenuItem(_ sender: NSMenuItem) { (sender.representedObject as? () -> Void)?() }
-    // Edits the file's name in its row, with the name before the extension selected.
+
+    @objc private func runMenuItem(_ sender: NSMenuItem) {
+        (sender.representedObject as? () -> Void)?()
+    }
+
+    /// Edits the file's name in its row, with the name before the extension selected.
     func beginRename(path: String) {
         guard isViewLoaded, renamingPath == nil else { return }
         var ancestor = (path as NSString).deletingLastPathComponent
         syncingTree = true
         while let folder, ancestor.hasPrefix(folder.path + "/") {
-            if let node = node(forPath: ancestor), case let .folder(entry, depth) = node.kind, !state.isExpanded(entry, depth: depth) { state.setExpanded(true, folder: entry, depth: depth) }
+            if let node = node(forPath: ancestor), case let .folder(entry, depth) = node.kind, !state.isExpanded(entry, depth: depth) {
+                state.setExpanded(true, folder: entry, depth: depth)
+            }
             ancestor = (ancestor as NSString).deletingLastPathComponent
         }
         syncingTree = false
@@ -528,29 +713,37 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         let name = field.stringValue as NSString
         field.currentEditor()?.selectedRange = NSRange(location: 0, length: name.deletingPathExtension.count)
     }
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+
+    func control(_ control: NSControl, textView _: NSTextView, doCommandBy selector: Selector) -> Bool {
         guard renamingPath != nil, control !== filterField, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
         renameCancelled = true
         view.window?.makeFirstResponder(filesView)
         return true
     }
+
     func controlTextDidEndEditing(_ notification: Notification) {
         guard let path = renamingPath, let field = notification.object as? NSTextField, field !== filterField else { return }
         finishRename(path: path, name: field.stringValue, cancelled: renameCancelled)
     }
-    // The row goes back to a label either way; a successful rename then refreshes the tree.
+
+    /// The row goes back to a label either way; a successful rename then refreshes the tree.
     func finishRename(path: String, name: String, cancelled: Bool = false) {
         renamingPath = nil
         reloadFiles()
-        if !cancelled, name != (path as NSString).lastPathComponent { onRename(path, name) }
+        if !cancelled, name != (path as NSString).lastPathComponent {
+            onRename(path, name)
+        }
     }
+
     private func node(forPath path: String) -> SidebarNode? {
         func find(_ nodes: [SidebarNode]) -> SidebarNode? {
             for node in nodes {
                 switch node.kind {
                 case let .file(entry) where entry.path == path: return node
                 case let .folder(entry, _) where entry.path == path: return node
-                default: if let found = find(node.children) { return found }
+                default: if let found = find(node.children) {
+                        return found
+                    }
                 }
             }
             return nil
@@ -560,11 +753,25 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: Inspection for tests
 
-    var openFileNames: [String] { roots.compactMap { if case let .openFile(file) = $0.kind { return file.name }; return nil } }
-    var currentOpenFileName: String? { roots.lazy.compactMap { if case let .openFile(file) = $0.kind, file.current { return file.name }; return nil }.first }
-    // Every visible file and folder row, indented by depth.
+    var openFileNames: [String] {
+        roots.compactMap {
+            if case let .openFile(file) = $0.kind {
+                return file.name
+            }; return nil
+        }
+    }
+
+    var currentOpenFileName: String? {
+        roots.lazy.compactMap {
+            if case let .openFile(file) = $0.kind, file.current {
+                return file.name
+            }; return nil
+        }.first
+    }
+
+    /// Every visible file and folder row, indented by depth.
     var visibleTreeRows: [String] {
-        (0..<filesView.numberOfRows).compactMap { row in
+        (0 ..< filesView.numberOfRows).compactMap { row in
             guard let node = filesView.item(atRow: row) as? SidebarNode else { return nil }
             let indent = String(repeating: "  ", count: filesView.level(forRow: row))
             switch node.kind {
@@ -575,8 +782,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             }
         }
     }
+
     func rowIndex(named name: String) -> Int? {
-        (0..<filesView.numberOfRows).first { row in
+        (0 ..< filesView.numberOfRows).first { row in
             switch (filesView.item(atRow: row) as? SidebarNode)?.kind {
             case let .openFile(file): return file.name == name
             case let .file(entry): return entry.name == name

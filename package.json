@@ -9,7 +9,8 @@
     "test": "./scripts/test.sh",
     "test:native": "./scripts/test-native.sh --ui",
     "test:webkit": "./scripts/test-webkit.sh",
-    "build:editor": "./scripts/build-editor.sh"
+    "build:editor": "./scripts/build-editor.sh",
+    "test:workspace": "./scripts/test-workspace.sh"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "6.20.3",

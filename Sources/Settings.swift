@@ -2,7 +2,10 @@ import Cocoa
 
 enum AppearanceChoice: String, CaseIterable {
     case light, dark, auto
-    var title: String { rawValue.capitalized }
+    var title: String {
+        rawValue.capitalized
+    }
+
     var appearance: NSAppearance? {
         switch self {
         case .light: return NSAppearance(named: .aqua)
@@ -14,11 +17,15 @@ enum AppearanceChoice: String, CaseIterable {
 
 struct Settings {
     let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
     var appearance: AppearanceChoice {
         get { defaults.string(forKey: "appearance").flatMap(AppearanceChoice.init(rawValue:)) ?? .auto }
         nonmutating set { defaults.set(newValue.rawValue, forKey: "appearance") }
     }
+
     // Document text size as a multiple of the default, stepped like a browser's zoom.
     static let textZoomSteps: [Double] = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
     var textZoom: Double {
@@ -28,8 +35,14 @@ struct Settings {
         }
         nonmutating set { defaults.set(newValue, forKey: "textZoom") }
     }
-    func zoomedIn() -> Double { Self.textZoomSteps.first { $0 > textZoom + 0.001 } ?? Self.textZoomSteps.last! }
-    func zoomedOut() -> Double { Self.textZoomSteps.last { $0 < textZoom - 0.001 } ?? Self.textZoomSteps.first! }
+
+    func zoomedIn() -> Double {
+        Self.textZoomSteps.first { $0 > textZoom + 0.001 } ?? Self.textZoomSteps.last!
+    }
+
+    func zoomedOut() -> Double {
+        Self.textZoomSteps.last { $0 < textZoom - 0.001 } ?? Self.textZoomSteps.first!
+    }
 }
 
 final class SettingsWindowController: NSWindowController {
@@ -56,17 +69,22 @@ final class SettingsWindowController: NSWindowController {
             form.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
             form.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
             form.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
-            form.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30)
+            form.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
         ])
         window.contentView = content
         refresh()
         window.center()
     }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     func refresh() {
         appearanceControl.selectedSegment = AppearanceChoice.allCases.firstIndex(of: settings.appearance)!
     }
+
     @objc func appearanceChanged(_ sender: NSSegmentedControl) {
         settings.appearance = AppearanceChoice.allCases[sender.selectedSegment]
         onChange()
