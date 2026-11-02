@@ -102,6 +102,44 @@
     const findEvent = key(document.querySelector('#find-input'), { key: 'z' });
     assert(!findEvent.defaultPrevented && messages.length === count, 'Undo in the find field was taken from the field');
   });
+  await test('Shortcut scope and capture behavior stay consistent in document, find, and insert fields', () => {
+    const field = selector => document.querySelector(selector);
+    const dialog = field('#insert-dialog');
+    for (const target of [app.view.contentDOM, field('#find-input'), field('#insert-url')]) {
+      const inDocument = target === app.view.contentDOM;
+      for (const key of ['z', 'b', 'i', 'k']) {
+        app.load({ text: 'word\n', token: 'shortcut-scope' });
+        app.view.dispatch({ selection: { anchor: 0, head: 4 } });
+        let reachedTarget = false;
+        const observe = () => { reachedTarget = true; };
+        target.addEventListener('keydown', observe);
+        const count = messages.length;
+        const event = new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true, cancelable: true });
+        target.dispatchEvent(event);
+        target.removeEventListener('keydown', observe);
+        assert(event.defaultPrevented === inDocument && reachedTarget !== inDocument, `Capture/guard changed for ${key} in ${target.id || 'document'}`);
+        if (!inDocument) assert(app.getMarkdown() === 'word\n' && messages.length === count && !dialog.open, 'Field shortcut edited document or posted native command');
+        else if (key === 'z') assert(messages.at(-1).action === 'undo', 'Document undo not routed');
+        else if (key === 'b') assert(app.getMarkdown() === '**word**\n', 'Document bold changed');
+        else if (key === 'i') assert(app.getMarkdown() === '*word*\n', 'Document italic changed');
+        else assert(dialog.open, 'Document link dialog missing');
+        if (dialog.open) dialog.close('cancel');
+      }
+      app.load({ text: 'word\n', token: 'global-scope' });
+      app.view.dispatch({ selection: { anchor: 0 } });
+      const heading = new KeyboardEvent('keydown', { key: '2', metaKey: true, bubbles: true, cancelable: true });
+      target.dispatchEvent(heading);
+      assert(heading.defaultPrevented && app.getMarkdown() === '## word\n', 'Global heading scope changed');
+      const count = messages.length;
+      const save = new KeyboardEvent('keydown', { key: 's', metaKey: true, shiftKey: true, bubbles: true, cancelable: true });
+      target.dispatchEvent(save);
+      assert(save.defaultPrevented && messages.slice(count).filter(message => message.action === 'saveAs').length === 1, 'Global Save As scope/count changed');
+      const modified = new KeyboardEvent('keydown', { key: 's', metaKey: true, altKey: true, bubbles: true, cancelable: true });
+      const before = messages.length;
+      target.dispatchEvent(modified);
+      assert(!modified.defaultPrevented && messages.length === before, 'Option modifier bypass changed');
+    }
+  });
   await test('A color scheme change switches the theme without touching the document', () => {
     app.load({ text: '# Theme\n\nKeep this text.\n', token: 'theme-load' });
     const count = messages.length;
