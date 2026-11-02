@@ -10,22 +10,22 @@
       this.toast = toast;
       this.insertKind = "link";
       $('#insert-dialog').addEventListener('close', () => {
-    if ($('#insert-dialog').returnValue !== 'insert') return;
-    const url = $('#insert-url').value.trim(); const description = $('#insert-description').value.trim();
-    if (!url || /^(javascript|vbscript|file):/i.test(url) || (this.insertKind === 'link' && /^data:/i.test(url))) { this.toast('Please use a web address or a relative file path.'); return; }
-    const label = (this.insertKind === 'image' ? description : description || url).replace(/[[\]]/g, '\\$&');
-    const target = /\s|[()]/.test(url) ? `<${url}>` : url;
-    const text = `${this.insertKind === 'image' ? '!' : ''}[${label}](${target})`;
-    const { from, to } = this.view.state.selection.main;
-    this.view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent: 'input.format' });
-    this.view.focus();
-  });
+        if ($('#insert-dialog').returnValue !== 'insert') return;
+        const url = $('#insert-url').value.trim(); const description = $('#insert-description').value.trim();
+        if (!url || /^(javascript|vbscript|file):/i.test(url) || (this.insertKind === 'link' && /^data:/i.test(url))) { this.toast('Please use a web address or a relative file path.'); return; }
+        const label = (this.insertKind === 'image' ? description : description || url).replace(/[[\]]/g, '\\$&');
+        const target = /\s|[()]/.test(url) ? `<${url}>` : url;
+        const text = `${this.insertKind === 'image' ? '!' : ''}[${label}](${target})`;
+        const { from, to } = this.view.state.selection.main;
+        this.view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent: 'input.format' });
+        this.view.focus();
+      });
       this.listPrefix = /^(\s*)(?:[-*+] \[[ xX]\] |[-*+] |\d+[.)] )?/;
       this.listKinds = {
-    bulletList: { test: /^\s*[-*+] (?!\[[ xX]\] )/, prefix: () => '- ' },
-    orderedList: { test: /^\s*\d+[.)] /, prefix: index => `${index + 1}. ` },
-    taskList: { test: /^\s*[-*+] \[[ xX]\] /, prefix: () => '- [ ] ' },
-  };
+        bulletList: { test: /^\s*[-*+] (?!\[[ xX]\] )/, prefix: () => '- ' },
+        orderedList: { test: /^\s*\d+[.)] /, prefix: index => `${index + 1}. ` },
+        taskList: { test: /^\s*[-*+] \[[ xX]\] /, prefix: () => '- [ ] ' },
+      };
     }
 
     insertDialog = (kind) => {

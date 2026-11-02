@@ -34,15 +34,15 @@
       const tree = ensureSyntaxTree(state, state.doc.length, 100) ?? syntaxTree(state);
       const result = [];
       tree.iterate({ enter(node) {
-        // Fenced code is parsed in its own language, which may itself be Markdown.
-        if (['FencedCode', 'CodeBlock', 'Frontmatter'].includes(node.name)) return false;
-        const match = /^(?:ATX|Setext)Heading(\d)$/.exec(node.name);
-        if (!match) return;
-        const firstLine = state.doc.lineAt(node.from);
-        const text = (node.name.startsWith('ATX') ? firstLine.text.replace(/^\s*#{1,6}\s*/, '').replace(/\s+#+\s*$/, '') : state.sliceDoc(node.from, state.doc.lineAt(node.to).from).trim()).trim();
-        if (text) result.push({ level: +match[1], text, pos: node.from });
-        return false;
-      } });
+          // Fenced code is parsed in its own language, which may itself be Markdown.
+          if (['FencedCode', 'CodeBlock', 'Frontmatter'].includes(node.name)) return false;
+          const match = /^(?:ATX|Setext)Heading(\d)$/.exec(node.name);
+          if (!match) return;
+          const firstLine = state.doc.lineAt(node.from);
+          const text = (node.name.startsWith('ATX') ? firstLine.text.replace(/^\s*#{1,6}\s*/, '').replace(/\s+#+\s*$/, '') : state.sliceDoc(node.from, state.doc.lineAt(node.to).from).trim()).trim();
+          if (text) result.push({ level: +match[1], text, pos: node.from });
+          return false;
+        } });
       return result;
     };
 

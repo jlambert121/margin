@@ -12,12 +12,12 @@
       this.toast = toast;
       this.native = Boolean(window.webkit?.messageHandlers?.native);
       this.post = (action, payload = {}) => {
-    if (this.native) window.webkit.messageHandlers.native.postMessage({ action, ...payload });
-    else if (action === 'changed') sessionStorage.setItem('margin-draft', payload.text);
-    else if (action === 'openExternal') window.open(payload.url, '_blank', 'noopener');
-    else if (['undo', 'redo', 'outline', 'contextMenu', 'previousFile', 'nextFile'].includes(action)) return;
-    else this.toast('Open the macOS app to use native file operations.');
-  };
+        if (this.native) window.webkit.messageHandlers.native.postMessage({ action, ...payload });
+        else if (action === 'changed') sessionStorage.setItem('margin-draft', payload.text);
+        else if (action === 'openExternal') window.open(payload.url, '_blank', 'noopener');
+        else if (['undo', 'redo', 'outline', 'contextMenu', 'previousFile', 'nextFile'].includes(action)) return;
+        else this.toast('Open the macOS app to use native file operations.');
+      };
       this.welcome = '# A little room to think.\n\nWelcome to **Margin**. A quiet place for your notes, ideas, and everything in between.\n\n## Just start writing\n\nYour words take shape as you type. Use Markdown shortcuts for headings, **bold**, *italics*, and lists — the formatting appears right here on the page.\n\n> The secret of getting ahead is getting started.\n\n## Make yourself at home\n\n- Open a Markdown file with **⌘O**\n- Browse a folder with **⇧⌘O**\n- Switch to source mode with **⌘/**\n- Save your work with **⌘S**\n\n### A few things to try\n\n- [x] Find a little space to write\n- [ ] Put an idea into words\n- [ ] Make something worth keeping\n\n## For the details\n\nCode, tables, links, and images all have a place here.\n\n```swift\nlet thought = "Something worth writing down."\nprint(thought)\n```\n\n| Shortcut | A small superpower |\n| --- | --- |\n| ⌘B | A little emphasis |\n| ⌘F | Find the right words |\n\n---\n\nTake your time. The page is yours.\n';
       this.raw = this.native ? '' : sessionStorage.getItem('margin-draft') ?? this.welcome;
       this.currentPath = '';

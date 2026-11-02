@@ -514,6 +514,31 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 try waitUntil { editor.webView.evaluateJavaScript("getComputedStyle(document.documentElement).getPropertyValue('--titlebar-inset').trim()") { result, _ in state = result as? String ?? "" }; return state == "\(inset)px" }
                 try expect(Int(editor.titlebarDragView.frame.height) == inset, "Drag strip does not cover the title bar")
             }
+            test("Cancelling a multi-document close leaves its documents and selection available") {
+                let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                let b = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                a.text = "Unsaved close fixture"; a.updateChangeCount(.changeDone)
+                for doc in [a, b] {
+                    doc.recoveryStore = recoveryStore; controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+                }
+                defer { a.close(); b.close() }
+                guard let host = a.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+                host.select(a)
+                window.performClose(nil)
+                try waitUntil { window.attachedSheet != nil }
+                func cancelButton(_ view: NSView) -> NSButton? {
+                    if let button = view as? NSButton, button.title == "Cancel" {
+                        return button
+                    }
+                    return view.subviews.lazy.compactMap(cancelButton).first
+                }
+                guard let content = window.attachedSheet?.contentView, let cancel = cancelButton(content) else { throw CocoaError(.fileReadUnknown) }
+                cancel.performClick(nil)
+                try waitUntil { window.attachedSheet == nil }
+                try expect(window.isVisible && host.documents.count == 2 && host.current === a && a.text == "Unsaved close fixture", "Cancelling closed a document or changed the current one")
+                host.select(b); host.select(a)
+                try expect(host.current === a && a.isDocumentEdited, "Documents were unavailable after cancellation")
+            }
             test("The sidebar runs the full window height and keeps its state while switching documents") {
                 for key in ["sidebarCollapsed", "sidebarWidth"] {
                     UserDefaults.standard.removeObject(forKey: key)
@@ -729,6 +754,22 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 try expect(sidebar.renamingPath == treeMoved && window.firstResponder is NSTextView, "Rename did not start editing the row")
                 guard let fieldEditor = window.firstResponder as? NSTextView else { throw CocoaError(.fileReadUnknown) }
                 try expect(fieldEditor.selectedRange() == NSRange(location: 0, length: "moved".count), "Rename did not select only the filename before its extension")
+                func captureSidebar(_ name: String) throws {
+                    let view = sidebar.view
+                    view.layoutSubtreeIfNeeded()
+                    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CocoaError(.featureUnsupported) }
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+                    try data.write(to: Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name))
+                }
+                try captureSidebar("sidebar-rename-normal.png")
+                let originalFrame = window.frame, originalWidth = host.sidebarWidth
+                window.setContentSize(NSSize(width: 700, height: 600))
+                host.splitController.splitView.setPosition(180, ofDividerAt: 0)
+                window.contentView?.layoutSubtreeIfNeeded()
+                try captureSidebar("sidebar-rename-narrow.png")
+                window.setFrame(originalFrame, display: true)
+                host.splitController.splitView.setPosition(originalWidth, ofDividerAt: 0)
                 sidebar.currentPath = ""
                 try expect(window.firstResponder === fieldEditor && sidebar.renamingPath == treeMoved, "A refresh ended the rename in progress")
                 fieldEditor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
@@ -776,6 +817,74 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 editor.formatFromMenu(table)
                 var text = ""
                 try waitUntil { editor.webView.evaluateJavaScript("app.getMarkdown()") { result, _ in text = result as? String ?? "" }; return text.contains("| Column | Column | Column |") }
+            }
+            test("Focused and unfocused preview fixtures retain bytes and capture their presentation") {
+                let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                doc.recoveryStore = recoveryStore
+                let text = "# Preview fixture\n\n- First **bold** item\n  - Nested item\n- [ ] A task\n\n> A short quote\n\n```swift\nlet value = 42\n```\n\n| Name | Value |\n| --- | --- |\n| **Bold** | 2 |\n"
+                doc.text = text
+                controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+                defer { doc.close() }
+                guard let editor = doc.editor, let host = editor.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+                host.workspace = root
+                try waitUntil { editor.canSynchronize && host.sidebar.folder != nil }
+                var selected = false
+                editor.webView.evaluateJavaScript("app.view.dispatch({selection:{anchor:24,head:28}}); app.view.focus(); true") { _, _ in selected = true }
+                try waitUntil { selected }
+                func snapshot(_ name: String) throws {
+                    var result: Result<NSImage, Error>?
+                    editor.webView.takeSnapshot(with: nil) { image, error in
+                        if let image {
+                            result = .success(image)
+                        } else {
+                            result = .failure(error ?? CocoaError(.featureUnsupported))
+                        }
+                    }
+                    try waitUntil { result != nil }
+                    let image = try result!.get()
+                    guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+                    try data.write(to: Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name))
+                }
+                try snapshot("preview-focused.png")
+                window.makeFirstResponder(host.sidebar.filterField)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                try snapshot("preview-unfocused.png")
+                try expect(doc.text == text && !doc.isDocumentEdited, "Focus or rendering changed fixture Markdown")
+            }
+            test("Native marked text and committed typing retain the table cell and its caret") {
+                let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                doc.recoveryStore = recoveryStore
+                doc.text = "Before\n\n| A | B |\n| --- | --- |\n|  | other |\n\nAfter\n"
+                controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+                defer { doc.close() }
+                guard let editor = doc.editor, let window = editor.window else { throw CocoaError(.fileReadUnknown) }
+                try waitUntil { editor.canSynchronize }
+                func script(_ source: String) throws -> Any? {
+                    var result: Result<Any?, Error>?
+                    editor.webView.evaluateJavaScript(source) { value, error in
+                        if let error {
+                            result = .failure(error)
+                        } else {
+                            result = .success(value)
+                        }
+                    }
+                    try waitUntil { result != nil }
+                    return try result!.get()
+                }
+                _ = try script("window.__compositionCell = document.querySelector('.cm-md-table [data-row=\"1\"][data-col=\"0\"]'); __compositionCell.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true,button:0})); true")
+                guard let client = window.firstResponder as? NSTextInputClient else { throw CocoaError(.featureUnsupported) }
+                let insertion = NSRange(location: NSNotFound, length: 0)
+                client.insertText("typed ", replacementRange: insertion)
+                try waitUntil { doc.text.contains("typed ") }
+                client.setMarkedText("字", selectedRange: NSRange(location: 1, length: 0), replacementRange: insertion)
+                try expect(client.hasMarkedText(), "Native input client did not begin composition")
+                try expect(try script("__compositionCell.isConnected && __compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.textContent.includes('字')") as? Bool == true, "Starting composition replaced the cell")
+                client.setMarkedText("字文", selectedRange: NSRange(location: 2, length: 0), replacementRange: insertion)
+                try expect(try script("__compositionCell.isConnected && __compositionCell.textContent.includes('字文')") as? Bool == true, "Updating marked text replaced the cell")
+                client.insertText("字文", replacementRange: insertion)
+                try waitUntil { doc.text.contains("| typed 字文 | other |") }
+                try expect(!client.hasMarkedText(), "Commit left marked text behind")
+                try expect(try script("__compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.contains(getSelection().anchorNode) && getSelection().isCollapsed") as? Bool == true, "Native commit lost cell identity or caret")
             }
             test("Typing in the page marks the document unsaved") {
                 let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument

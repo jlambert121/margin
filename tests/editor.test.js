@@ -280,6 +280,45 @@
     assert(grid().querySelectorAll('tbody tr').length === 2 && editing() === cell(1, 0), 'Insert row above: ' + app.getMarkdown());
     press(editing(), 'Escape'); await tick();
   });
+  await test('Deleting an edited last row clamps focus and consumes the request', async () => {
+    app.load({ text: tableText, name: 'Clamp.md' }); await tick();
+    cell(2, 1).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    await menuItem(2, 1, 'Delete Row');
+    assert(editing() === cell(1, 1), 'Deleted last row did not clamp the prior active coordinate');
+    const dom = editing().closest('.cm-md-table');
+    dom.focusAfterRender = [99, 99];
+    new MarginTables.TableWidget(dom.tableSource).updateDOM(dom);
+    assert(editing() === cell(1, 1) && dom.focusAfterRender === null, 'Explicit focus did not clamp/consume once');
+    const target = editing();
+    typeInCell('Clamped'); await tick();
+    assert(editing() === target && app.getMarkdown().includes('| **Bold** | Clamped |'), 'Typing after clamp used the wrong destination');
+    press(editing(), 'Escape');
+  });
+  await test('Missing cells and optional outer pipes preserve unrelated table source', async () => {
+    const text = 'Before\n\nName | Value\n--- | ---\nOnly\n\nAfter\n';
+    app.load({ text, name: 'Ragged.md' }); await tick();
+    assert(cell(1, 1)?.textContent === '', 'Missing cell did not render empty');
+    cell(1, 1).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    typeInCell('Added'); await tick();
+    assert(app.getMarkdown() === text.replace('Only\n', '| Only | Added |\n'), 'Missing-cell edit changed unrelated source: ' + app.getMarkdown());
+    press(editing(), 'Escape');
+  });
+  await test('Second-table edits and source mode follow mapped offsets', async () => {
+    const first = '| A | B |\n| --- | --- |\n| one | two |';
+    const second = '| C | D |\n| --- | --- |\n| three | four |';
+    const text = `Before\n\n${first}\n\nBetween\n\n${second}\n\nAfter\n`;
+    app.load({ text, name: 'Two tables.md' }); cursorAt(0); await tick();
+    const dom = document.querySelectorAll('.cm-md-table')[1];
+    const target = dom.querySelector('[data-row="1"][data-col="0"]');
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    typeInCell('Changed'); await tick();
+    assert(app.getMarkdown() === text.replace('three', 'Changed'), 'Second-table edit used first-table offsets');
+    target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    [...document.querySelectorAll('.table-menu button')].find(button => button.textContent === 'Edit as Markdown').click(); await tick();
+    app.view.dispatch({ changes: { from: 0, insert: 'Prefix\n' } }); await tick();
+    assert(document.querySelectorAll('.cm-md-table').length === 1 && document.querySelectorAll('.cm-md-table-source').length === 3, 'Source-table position did not map through the prefix edit');
+    assert(app.getMarkdown() === 'Prefix\n' + text.replace('three', 'Changed'), 'Mapping changed source bytes');
+  });
   await test('Edit as Markdown shows the table source until the cursor leaves it', async () => {
     app.load({ text: tableText, name: 'Table.md' }); cursorAt(0); await tick();
     await menuItem(1, 0, 'Edit as Markdown');

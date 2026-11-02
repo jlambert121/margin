@@ -34,12 +34,12 @@
       return handled;
     };
     keydown = event => {
-    const { closeMenus } = this;
-    if (event.key === 'Escape') { closeMenus(); $('#find-bar').hidden = true; $('#goto-bar').hidden = true; }
-    if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
-    const key = event.key.toLowerCase();
-    const handled = this.documentShortcut(event, key) || this.globalShortcut(event, key);
-    if (handled) { event.preventDefault(); event.stopPropagation(); }
+      const { closeMenus } = this;
+      if (event.key === 'Escape') { closeMenus(); $('#find-bar').hidden = true; $('#goto-bar').hidden = true; }
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      const handled = this.documentShortcut(event, key) || this.globalShortcut(event, key);
+      if (handled) { event.preventDefault(); event.stopPropagation(); }
     };
   }
   window.MarginAppShortcuts = options => new AppShortcuts(options);
