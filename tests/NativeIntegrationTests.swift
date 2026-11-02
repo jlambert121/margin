@@ -773,7 +773,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                     view.cacheDisplay(in: view.bounds, to: bitmap)
                     let image = NSImage(size: view.bounds.size)
                     image.lockFocus()
-                    NSColor.windowBackgroundColor.setFill(); NSRectFill(view.bounds)
+                    NSColor.windowBackgroundColor.setFill(); view.bounds.fill()
                     bitmap.draw(in: view.bounds)
                     image.unlockFocus()
                     guard let tiff = image.tiffRepresentation, let opaque = NSBitmapImageRep(data: tiff), let data = opaque.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
