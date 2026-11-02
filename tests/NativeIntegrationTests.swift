@@ -846,6 +846,15 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 host.workspace = root
                 try waitUntil { editor.canSynchronize && host.sidebar.folder != nil }
                 host.sidebar.state.mode = .files; host.sidebar.state.collapsed = false
+                let activationPolicy = NSApp.activationPolicy()
+                NSApp.setActivationPolicy(.regular)
+                defer { NSApp.setActivationPolicy(activationPolicy) }
+                if #available(macOS 14, *) {
+                    NSApp.activate()
+                } else {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                try waitUntil { NSApp.isActive }
                 window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor.webView)
                 var selected = false
                 editor.webView.evaluateJavaScript("app.view.dispatch({selection:{anchor:24,head:28}}); app.view.focus(); true") { _, _ in selected = true }
