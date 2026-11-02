@@ -145,12 +145,19 @@
     const shape = `${table.lines.length}x${table.columns}`;
     const editing = dom.querySelector('.cm-md-cell-editing');
     if (editing && dom.tableShape === shape && !dom.focusAfterRender) {
-      for (const cell of dom.querySelectorAll('[data-row]')) if (cell !== editing) fillCell(cell, table);
+      refreshOtherCells(dom, table, editing);
       return;
     }
     const focus = dom.focusAfterRender ?? (editing ? [+editing.dataset.row, +editing.dataset.col] : null);
     dom.focusAfterRender = null;
     dom.tableShape = shape;
+    dom.replaceChildren(buildTableElement(table));
+    restoreFocus(dom, table, focus);
+  }
+  function refreshOtherCells(dom, table, editing) {
+    for (const cell of dom.querySelectorAll('[data-row]')) if (cell !== editing) fillCell(cell, table);
+  }
+  function buildTableElement(table) {
     const element = document.createElement('table');
     const head = element.createTHead().insertRow(), body = element.createTBody();
     for (let row = 0; row <= table.bodyRows; row++) {
@@ -161,14 +168,17 @@
         fillCell(cell, table); tr.append(cell);
       }
     }
-    dom.replaceChildren(element);
+    return element;
+  }
+  function restoreFocus(dom, table, focus) {
     if (focus) {
       const row = Math.min(focus[0] ?? 0, table.bodyRows), col = Math.min(focus[1] ?? 0, table.columns - 1);
       const cell = cellAt(dom, row, col);
       if (cell) startEditing(dom, cell);
     }
   }
-  function move(view, dom, cell, rowOffset, colOffset, addRowAtEnd) {
+  function move(view, dom, cell, movement) {
+    const { rowOffset, colOffset, addRowAtEnd = false } = movement;
     const table = parseTable(dom.tableSource);
     let row = +cell.dataset.row, col = +cell.dataset.col + colOffset;
     if (col >= table.columns) { col = 0; row++; }
@@ -260,9 +270,9 @@
       dom.addEventListener('keydown', event => {
         const cell = event.target.closest('.cm-md-cell-editing');
         if (!cell || event.metaKey || event.ctrlKey || event.altKey) return;
-        if (event.key === 'Tab') move(view, dom, cell, 0, event.shiftKey ? -1 : 1, !event.shiftKey);
-        else if (event.key === 'Enter' || event.key === 'ArrowDown') move(view, dom, cell, 1, 0, false);
-        else if (event.key === 'ArrowUp') move(view, dom, cell, -1, 0, false);
+        if (event.key === 'Tab') move(view, dom, cell, { rowOffset: 0, colOffset: event.shiftKey ? -1 : 1, addRowAtEnd: !event.shiftKey });
+        else if (event.key === 'Enter' || event.key === 'ArrowDown') move(view, dom, cell, { rowOffset: 1, colOffset: 0 });
+        else if (event.key === 'ArrowUp') move(view, dom, cell, { rowOffset: -1, colOffset: 0 });
         else if (event.key === 'Escape') leave(view, dom, cell);
         else return;
         event.preventDefault();

@@ -196,7 +196,11 @@
     cell(1, 0).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
     const target = editing();
     assert(target === cell(1, 0) && target.textContent === '**Bold**', 'Editing cell does not show its Markdown');
-    typeInCell('**Bolder** | text'); await tick();
+    target.textContent = '**Bolder** | text';
+    const selection = window.getSelection();
+    selection.setBaseAndExtent(target.firstChild, 4, target.firstChild, 4);
+    target.dispatchEvent(new InputEvent('input', { bubbles: true })); await tick();
+    assert(selection.anchorNode === target.firstChild && selection.anchorOffset === 4 && selection.isCollapsed, 'Cell caret moved during redraw');
     const expected = tableText.replace('**Bold**', '**Bolder** \\| text');
     assert(app.getMarkdown() === expected, 'Cell edit rewrote more than the cell: ' + JSON.stringify(app.getMarkdown()));
     assert(editing() === target && target.isConnected, 'The edited cell was replaced while typing');
@@ -218,6 +222,45 @@
     assert(editing() === cell(3, 0), 'New row not focused');
     typeInCell('New'); await tick();
     assert(app.getMarkdown().includes('| New |  |'), 'Typing in the new row failed: ' + JSON.stringify(app.getMarkdown()));
+  });
+  await test('Table navigation preserves boundaries and bypasses modified keys', async () => {
+    app.load({ text: tableText, name: 'Table.md' }); await tick();
+    cell(0, 0).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    for (const key of ['ArrowUp', 'Tab']) {
+      press(editing(), key, { shiftKey: true });
+      assert(editing() === cell(0, 0), 'Moved before header');
+    }
+    press(editing(), 'ArrowDown');
+    assert(editing() === cell(1, 0), 'ArrowDown did not enter body');
+    press(editing(), 'Tab', { shiftKey: true });
+    assert(editing() === cell(0, 1), 'Backward Tab did not wrap to header');
+    press(editing(), 'ArrowDown'); press(editing(), 'ArrowDown');
+    assert(editing() === cell(2, 1), 'Down did not reach last row');
+    for (const key of ['Enter', 'ArrowDown']) {
+      press(editing(), key);
+      assert(editing() === cell(2, 1) && app.getMarkdown() === tableText, 'Down at last row changed table');
+    }
+    for (const modifier of ['metaKey', 'ctrlKey', 'altKey']) {
+      for (const key of ['Tab', 'Enter', 'ArrowUp', 'ArrowDown']) {
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, [modifier]: true });
+        editing().dispatchEvent(event);
+        assert(!event.defaultPrevented && editing() === cell(2, 1) && app.getMarkdown() === tableText, 'Modified navigation intercepted');
+      }
+    }
+    press(editing(), 'Escape');
+  });
+  await test('Same-shape moves consume focus requests and type at the requested destination', async () => {
+    app.load({ text: tableText, name: 'Table.md' }); await tick();
+    cell(1, 1).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    await menuItem(1, 1, 'Move Row Down');
+    assert(editing() === cell(2, 0) && !editing().closest('.cm-md-table').focusAfterRender, 'Row destination/default column or request consumption wrong');
+    typeInCell('Moved'); await tick();
+    assert(app.getMarkdown() === tableText.replace('| **Bold** | a \\| b |\n| Plain | 2 |', '| Plain | 2 |\n| Moved | a \\| b |'), 'Typing used old row');
+    await menuItem(2, 0, 'Move Column Right');
+    assert(editing() === cell(0, 1) && !editing().closest('.cm-md-table').focusAfterRender, 'Column destination/default row or request consumption wrong');
+    typeInCell('Heading'); await tick();
+    assert(app.getMarkdown().includes('| Value | Heading |') && app.getMarkdown().includes('| a \\| b | Moved |'), 'Typing used old column');
+    press(editing(), 'Escape');
   });
   await test('The table menu edits rows, columns, and alignment', async () => {
     app.load({ text: tableText, name: 'Table.md' }); cursorAt(0); await tick();
