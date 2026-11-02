@@ -22,25 +22,18 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let splitController = EditorSplitViewController()
     let sidebarItem: NSSplitViewItem
     private let content = NSView()
-    private var collapseObservation: NSKeyValueObservation?
-    private var sidebarStateObserver: NSObjectProtocol?
-    private var applyingSidebarState = false
+    private lazy var sidebarCoordinator = WindowSidebarCoordinator(host: self)
     private var closingAll = false
     private var pendingClose: ((Bool) -> Void)?
-    /// The folder this window's sidebar lists, and its Markdown files as of the last scan.
     var workspace: URL? {
-        didSet {
-            guard workspace != oldValue else { return }
-            workspaceTree = nil; workspaceScan += 1
-            sidebar.setFolder(nil)
-            refreshFolder()
-            refresh()
-            window?.invalidateRestorableState()
-        }
+        get { sidebarCoordinator.workspace }
+        set { sidebarCoordinator.workspace = newValue }
     }
 
-    private(set) var workspaceTree: FolderEntry?
-    private var workspaceScan = 0
+    var workspaceTree: FolderEntry? {
+        sidebarCoordinator.workspaceTree
+    }
+
     private var app: AppDelegate? {
         (NSDocumentController.shared as? DocumentController)?.app
     }
@@ -72,7 +65,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         // Set on the controller, after init: adopting the window replaces the
         // window's own autosave name with the controller's, which defaults to empty.
         windowFrameAutosaveName = "MarginEditor"
-        connectSidebar()
+        sidebarCoordinator.connect()
         NotificationCenter.default.addObserver(self, selector: #selector(documentChanged(_:)), name: .openFilesChanged, object: nil)
     }
 
@@ -83,9 +76,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        if let sidebarStateObserver {
-            NotificationCenter.default.removeObserver(sidebarStateObserver)
-        }
     }
 
     // MARK: Documents
@@ -216,7 +206,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         return details
     }
 
-    private func document(id: String) -> MarkdownDocument? {
+    func document(id: String) -> MarkdownDocument? {
         documents.first { $0.recoveryID.uuidString == id }
     }
 
@@ -292,83 +282,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: Sidebar
 
-    private func connectSidebar() {
-        sidebar.onSelectOpenFile = {
-            [weak self] id in if let doc = self?.document(id: id) {
-                self?.select(doc)
-            }
-        }
-        sidebar.onCloseOpenFile = {
-            [weak self] id in if let doc = self?.document(id: id) {
-                self?.close(doc)
-            }
-        }
-        sidebar.onMoveOpenFile = {
-            [weak self] id, index in if let doc = self?.document(id: id) {
-                self?.move(doc, to: index)
-            }
-        }
-        sidebar.onOpenPath = { [weak self] path in self?.openWorkspaceFile(path) }
-        sidebar.onNewFile = { [weak self] folder in
-            guard let self, let window = self.window else { return }
-            do { try self.app?.createWorkspaceFile(in: URL(fileURLWithPath: folder), in: self) }
-            catch { self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil) }
-        }
-        sidebar.onRename = { [weak self] path, name in
-            guard let self else { return }
-            self.app?.renameWorkspaceFile(URL(fileURLWithPath: path), to: name, in: self) { [weak self] error in
-                guard let self, let error, let window = self.window else { return }
-                self.presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
-            }
-        }
-        sidebar.onReveal = { [weak self] pos in
-            guard let self, let editor = self.currentEditor else { return }
-            self.window?.makeFirstResponder(editor.webView)
-            editor.send("reveal", pos)
-        }
-        sidebar.onAction = { [weak self] action in
-            switch action {
-            case "new": self?.app?.newDocument(nil)
-            case "open": NSDocumentController.shared.openDocument(nil)
-            case "openFolder": self?.app?.openFolder(nil)
-            case "refreshFolder": self?.refreshFolder()
-            case "toggleSidebar": self?.toggleSidebar()
-            default: break
-            }
-        }
-        collapseObservation = sidebarItem.observe(\.isCollapsed, options: [.new]) { [weak self] item, _ in
-            guard let self else { return }
-            for doc in self.documents {
-                doc.editor?.send("sidebar", ["open": !item.isCollapsed])
-            }
-            if !self.applyingSidebarState {
-                self.sidebar.state.collapsed = item.isCollapsed
-            }
-        }
-        splitController.onResize = { [weak self] in
-            guard let self, !self.applyingSidebarState, !self.sidebarItem.isCollapsed, self.sidebarWidth > 0 else { return }
-            self.sidebar.state.width = self.sidebarWidth
-        }
-        sidebarStateObserver = NotificationCenter.default.addObserver(forName: .sidebarStateChanged, object: sidebar.state, queue: .main) { [weak self] _ in
-            self?.applySidebarState(animated: self?.window?.isKeyWindow == true)
-        }
-        applySidebarState(animated: false)
-    }
-
-    private func applySidebarState(animated: Bool) {
-        let state = sidebar.state
-        applyingSidebarState = true
-        defer { applyingSidebarState = false }
-        if sidebarItem.isCollapsed != state.collapsed {
-            if animated {
-                sidebarItem.animator().isCollapsed = state.collapsed
-            } else {
-                sidebarItem.isCollapsed = state.collapsed
-            }
-        }
-        if !state.collapsed, abs(sidebarWidth - state.width) > 0.5, splitController.splitView.arrangedSubviews.count > 1 {
-            splitController.splitView.setPosition(state.width, ofDividerAt: 0)
-        }
+    func workspaceDidChange() {
+        refresh()
+        window?.invalidateRestorableState()
     }
 
     /// The pane's width, which the divider position sets. The sidebar's own view
@@ -398,93 +314,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         return path == root || path.hasPrefix(root + "/")
     }
 
-    /// Scans off the main thread; only the newest scan's result is kept.
     func refreshFolder(completion: @escaping () -> Void = {}) {
-        guard let workspace else { completion(); return }
-        workspaceScan += 1
-        let scan = workspaceScan
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let tree = WorkspaceScanner.scan(workspace)
-            DispatchQueue.main.async {
-                defer { completion() }
-                guard let self, scan == self.workspaceScan, tree != self.workspaceTree else { return }
-                self.workspaceTree = tree
-                self.sidebar.setFolder(tree)
-            }
-        }
+        sidebarCoordinator.refreshFolder(completion: completion)
     }
 
     // MARK: Restoration
 
-    /// Each document by its file, or by its autosaved copy when it was never saved, and the open folder.
     func window(_: NSWindow, willEncodeRestorableState state: NSCoder) {
-        let entries: [[String: Any]] = documents.compactMap { doc in
-            var entry: [String: Any] = ["recoveryID": doc.recoveryID.uuidString, "welcome": doc.isWelcome]
-            if let path = doc.fileURL?.path {
-                entry["path"] = path
-            } else if let autosaved = doc.autosavedContentsFileURL?.path {
-                entry["autosaved"] = autosaved
-            } else if !doc.isWelcome, doc.isDocumentEdited {
-                return nil
-            }
-            if let name = doc.recoveredName {
-                entry["recoveredName"] = name
-            }
-            if let original = doc.recoveredOriginalURL?.path {
-                entry["recoveredOriginalPath"] = original
-            }
-            return entry
-        }
-        state.encode(entries, forKey: "Margin.documents")
-        state.encode(current.flatMap { current in documents.firstIndex { $0 === current } } ?? 0, forKey: "Margin.current")
-        if let workspace {
-            state.encode(workspace.path as NSString, forKey: "Margin.workspace")
-        }
+        WindowRestoration.encode(WindowRestoration.snapshot(self), to: state)
     }
 
     func restore(from state: NSCoder, completion: @escaping () -> Void) {
-        let allowed = [NSArray.self, NSDictionary.self, NSString.self, NSNumber.self]
-        let entries = state.decodeObject(of: allowed, forKey: "Margin.documents") as? [[String: Any]] ?? []
-        let selected = state.decodeInteger(forKey: "Margin.current")
-        var isFolder: ObjCBool = false
-        if let path = state.decodeObject(of: NSString.self, forKey: "Margin.workspace") as String?,
-           FileManager.default.fileExists(atPath: path, isDirectory: &isFolder), isFolder.boolValue
-        {
-            workspace = URL(fileURLWithPath: path)
-        }
-        guard let app, !entries.isEmpty else { completion(); return }
-        var restored = [MarkdownDocument?](repeating: nil, count: entries.count)
-        var remaining = entries.count
-        func finished(_ index: Int, _ doc: MarkdownDocument?) {
-            restored[index] = doc
-            remaining -= 1
-            guard remaining == 0 else { return }
-            for doc in restored.compactMap({ $0 }) {
-                add(doc, at: documents.count)
-            }
-            if let doc = restored.indices.contains(selected) ? restored[selected] : nil {
-                select(doc)
-            }
-            completion()
-        }
-        for (index, entry) in entries.enumerated() {
-            app.restoreDocument(entry) { doc in finished(index, doc) }
-        }
-    }
-}
-
-final class EditorWindowRestoration: NSObject, NSWindowRestoration {
-    static func restoreWindow(withIdentifier _: NSUserInterfaceItemIdentifier, state: NSCoder, completionHandler: @escaping (NSWindow?, Error?) -> Void) {
-        guard let app = (NSDocumentController.shared as? DocumentController)?.app else { completionHandler(nil, CocoaError(.featureUnsupported)); return }
-        let host = app.makeWindow()
-        app.beginRestoring()
-        host.restore(from: state) {
-            app.endRestoring()
-            if host.documents.isEmpty {
-                host.close(); completionHandler(nil, CocoaError(.fileReadNoSuchFile))
-            } else {
-                completionHandler(host.window, nil)
-            }
-        }
+        WindowRestoration.restore(self, from: state, completion: completion)
     }
 }

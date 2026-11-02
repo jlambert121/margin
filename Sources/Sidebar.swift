@@ -242,11 +242,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     private func selectCurrentFile() {
-        let current = roots.firstIndex {
-            if case let .openFile(file) = $0.kind {
-                return file.current
-            }; return false
-        }
+        let current = roots.firstIndex { $0.openFile?.current == true }
         if let current {
             filesView.selectRowIndexes(IndexSet(integer: filesView.row(forItem: roots[current])), byExtendingSelection: false)
         } else {

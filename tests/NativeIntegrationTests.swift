@@ -584,6 +584,16 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 try waitUntil { refreshed }
                 try expect(other.sidebar.visibleTreeRows == ["Elsewhere.md"] && host.sidebar.visibleTreeRows.contains("A real file.md"), "Refreshing mixed the windows' folders")
             }
+            test("Clearing a workspace rejects scans already queued for that window") {
+                let host = delegate.makeWindow()
+                defer { host.close() }
+                host.workspace = root
+                var finished = false
+                host.refreshFolder { finished = true }
+                host.workspace = nil
+                try waitUntil { finished }
+                try expect(host.workspace == nil && host.workspaceTree == nil && host.sidebar.folder == nil, "A stale scan repopulated a cleared workspace")
+            }
             test("The sidebar lists, filters, and opens workspace files, and remembers folders opened across tabs") {
                 let nested = root.appendingPathComponent("Nested", isDirectory: true)
                 try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
@@ -717,7 +727,12 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 try waitUntil { sidebar.visibleTreeRows.contains { $0.hasSuffix("moved.md") } }
                 sidebar.beginRename(path: treeMoved)
                 try expect(sidebar.renamingPath == treeMoved && window.firstResponder is NSTextView, "Rename did not start editing the row")
-                sidebar.finishRename(path: treeMoved, name: "ignored", cancelled: true)
+                guard let fieldEditor = window.firstResponder as? NSTextView else { throw CocoaError(.fileReadUnknown) }
+                try expect(fieldEditor.selectedRange() == NSRange(location: 0, length: "moved".count), "Rename did not select only the filename before its extension")
+                sidebar.currentPath = ""
+                try expect(window.firstResponder === fieldEditor && sidebar.renamingPath == treeMoved, "A refresh ended the rename in progress")
+                fieldEditor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+                try waitUntil { sidebar.renamingPath == nil }
                 try expect(doc.fileURL?.lastPathComponent == "moved.md" && sidebar.renamingPath == nil, "Cancelling a rename renamed the file")
 
                 let before = try Set(FileManager.default.contentsOfDirectory(atPath: folder.path))
