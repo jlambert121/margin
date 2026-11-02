@@ -774,7 +774,9 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                     let image = NSImage(size: view.bounds.size)
                     image.lockFocus()
                     NSColor.windowBackgroundColor.setFill(); view.bounds.fill()
-                    bitmap.draw(in: view.bounds)
+                    let foreground = NSImage(size: view.bounds.size)
+                    foreground.addRepresentation(bitmap)
+                    foreground.draw(in: view.bounds, from: .zero, operation: .sourceOver, fraction: 1)
                     image.unlockFocus()
                     guard let tiff = image.tiffRepresentation, let opaque = NSBitmapImageRep(data: tiff), let data = opaque.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
                     try data.write(to: Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name))
@@ -846,6 +848,14 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 host.workspace = root
                 try waitUntil { editor.canSynchronize && host.sidebar.folder != nil }
                 host.sidebar.state.mode = .files; host.sidebar.state.collapsed = false
+                @MainActor func awaitNativeEvents(_ condition: () -> Bool) throws {
+                    try waitUntil {
+                        while let event = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                            NSApp.sendEvent(event)
+                        }
+                        return condition()
+                    }
+                }
                 let activationPolicy = NSApp.activationPolicy()
                 NSApp.setActivationPolicy(.regular)
                 defer { NSApp.setActivationPolicy(activationPolicy) }
@@ -854,13 +864,13 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 } else {
                     NSApp.activate(ignoringOtherApps: true)
                 }
-                try waitUntil { NSApp.isActive }
+                try awaitNativeEvents { NSApp.isActive }
                 window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor.webView)
                 var selected = false
                 editor.webView.evaluateJavaScript("app.view.dispatch({selection:{anchor:24,head:28}}); app.view.focus(); true") { _, _ in selected = true }
                 try waitUntil { selected }
                 var focused = false
-                try waitUntil { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return focused }
+                try awaitNativeEvents { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return focused }
                 RunLoop.current.run(until: Date().addingTimeInterval(0.1))
                 @MainActor func snapshot(_ name: String) throws {
                     var result: Result<NSImage, Error>?
@@ -878,7 +888,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 }
                 try snapshot("preview-focused.png")
                 window.makeFirstResponder(host.sidebar.filterField)
-                try waitUntil { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return !focused }
+                try awaitNativeEvents { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return !focused }
                 RunLoop.current.run(until: Date().addingTimeInterval(0.1))
                 try snapshot("preview-unfocused.png")
                 try expect(doc.text == text && !doc.isDocumentEdited, "Focus or rendering changed fixture Markdown")
