@@ -760,6 +760,8 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 let treeMoved = treeFolder + "/moved.md"
                 guard let sidebar = editor.host?.sidebar else { throw CocoaError(.fileReadUnknown) }
                 try waitUntil { sidebar.visibleTreeRows.contains { $0.hasSuffix("moved.md") } }
+                sidebar.state.mode = .files; sidebar.state.collapsed = false
+                try waitUntil { !host.sidebarItem.isCollapsed }
                 sidebar.beginRename(path: treeMoved)
                 try expect(sidebar.renamingPath == treeMoved && window.firstResponder is NSTextView, "Rename did not start editing the row")
                 guard let fieldEditor = window.firstResponder as? NSTextView else { throw CocoaError(.fileReadUnknown) }
@@ -769,7 +771,12 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                     view.layoutSubtreeIfNeeded()
                     guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CocoaError(.featureUnsupported) }
                     view.cacheDisplay(in: view.bounds, to: bitmap)
-                    guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+                    let image = NSImage(size: view.bounds.size)
+                    image.lockFocus()
+                    NSColor.windowBackgroundColor.setFill(); NSRectFill(view.bounds)
+                    bitmap.draw(in: view.bounds)
+                    image.unlockFocus()
+                    guard let tiff = image.tiffRepresentation, let opaque = NSBitmapImageRep(data: tiff), let data = opaque.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
                     try data.write(to: Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name))
                 }
                 try captureSidebar("sidebar-rename-normal.png")
@@ -838,9 +845,14 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 guard let editor = doc.editor, let host = editor.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
                 host.workspace = root
                 try waitUntil { editor.canSynchronize && host.sidebar.folder != nil }
+                host.sidebar.state.mode = .files; host.sidebar.state.collapsed = false
+                window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor.webView)
                 var selected = false
                 editor.webView.evaluateJavaScript("app.view.dispatch({selection:{anchor:24,head:28}}); app.view.focus(); true") { _, _ in selected = true }
                 try waitUntil { selected }
+                var focused = false
+                try waitUntil { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return focused }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
                 @MainActor func snapshot(_ name: String) throws {
                     var result: Result<NSImage, Error>?
                     editor.webView.takeSnapshot(with: nil) { image, error in
@@ -857,6 +869,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 }
                 try snapshot("preview-focused.png")
                 window.makeFirstResponder(host.sidebar.filterField)
+                try waitUntil { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return !focused }
                 RunLoop.current.run(until: Date().addingTimeInterval(0.1))
                 try snapshot("preview-unfocused.png")
                 try expect(doc.text == text && !doc.isDocumentEdited, "Focus or rendering changed fixture Markdown")
@@ -881,20 +894,30 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                     try waitUntil { result != nil }
                     return try result!.get()
                 }
+                @MainActor func awaitScript(_ source: String) throws {
+                    var observed = false
+                    try waitUntil {
+                        editor.webView.evaluateJavaScript(source) { result, _ in observed = result as? Bool == true }
+                        return observed
+                    }
+                }
                 _ = try script("window.__compositionCell = document.querySelector('.cm-md-table [data-row=\"1\"][data-col=\"0\"]'); __compositionCell.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true,button:0})); true")
+                _ = try script("window.__compositionEvents = []; for (const type of ['compositionstart','compositionupdate','compositionend','beforeinput','input']) __compositionCell.addEventListener(type, event => __compositionEvents.push({type, data:event.data, composing:event.isComposing, trusted:event.isTrusted})); true")
                 guard let client = window.firstResponder as? NSTextInputClient else { throw CocoaError(.featureUnsupported) }
                 let insertion = NSRange(location: NSNotFound, length: 0)
                 client.insertText("typed ", replacementRange: insertion)
                 try waitUntil { doc.text.contains("typed ") }
                 client.setMarkedText("字", selectedRange: NSRange(location: 1, length: 0), replacementRange: insertion)
-                try waitUntil { client.hasMarkedText() }
-                try expect(try script("__compositionCell.isConnected && __compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.textContent.includes('字')") as? Bool == true, "Starting composition replaced the cell")
+                // WebKit's Cocoa hasMarkedText cache can stay false while native DOM composition is active.
+                // Trusted events and the live cell test the actual marked text rather than that cache.
+                try awaitScript("__compositionEvents.some(e => e.type === 'compositionstart' && e.trusted) && __compositionEvents.some(e => e.type === 'input' && e.composing && e.trusted) && __compositionCell.isConnected && __compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.textContent === 'typed 字'")
                 client.setMarkedText("字文", selectedRange: NSRange(location: 2, length: 0), replacementRange: insertion)
-                try expect(try script("__compositionCell.isConnected && __compositionCell.textContent.includes('字文')") as? Bool == true, "Updating marked text replaced the cell")
+                try awaitScript("__compositionEvents.some(e => e.type === 'compositionupdate' && e.data === '字文' && e.trusted) && __compositionCell.isConnected && __compositionCell.textContent === 'typed 字文' && __compositionCell.contains(getSelection().anchorNode)")
                 client.insertText("字文", replacementRange: insertion)
-                try waitUntil { doc.text.contains("| typed 字文 | other |") }
-                try waitUntil { !client.hasMarkedText() }
-                try expect(try script("__compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.contains(getSelection().anchorNode) && getSelection().isCollapsed") as? Bool == true, "Native commit lost cell identity or caret")
+                // Empty-cell input retains the model's existing surrounding whitespace on the base revision too.
+                let committed = "Before\n\n| A | B |\n| --- | --- |\n| typed 字文   | other |\n\nAfter\n"
+                try waitUntil { doc.text == committed }
+                try awaitScript("__compositionEvents.some(e => e.type === 'compositionend' && e.trusted) && __compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.contains(getSelection().anchorNode) && getSelection().isCollapsed && __compositionCell.textContent === 'typed 字文'")
             }
             test("Typing in the page marks the document unsaved") {
                 let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
