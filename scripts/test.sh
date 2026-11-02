@@ -3,11 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/module-cache.sh
 node --test tests/planning.test.mjs tests/execution.test.mjs
-node --check web/src/app.js
-node --check web/src/diagnostics.js
-node --check web/src/markdown.js
-node --check web/src/live-preview.js
-node --check web/src/table-editor.js
+for script in web/src/*.js; do
+  node --check "$script"
+done
 plutil -lint Resources/Info.plist
 ./scripts/test-workspace.sh
 ./scripts/test-native.sh
