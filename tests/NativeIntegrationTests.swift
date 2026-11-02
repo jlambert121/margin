@@ -837,70 +837,6 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 var text = ""
                 try waitUntil { editor.webView.evaluateJavaScript("app.getMarkdown()") { result, _ in text = result as? String ?? "" }; return text.contains("| Column | Column | Column |") }
             }
-            test("Focused and unfocused preview fixtures retain bytes and capture their presentation") {
-                let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
-                doc.recoveryStore = recoveryStore
-                let text = "# Preview fixture\n\n- First **bold** item\n  - Nested item\n- [ ] A task\n\n> A short quote\n\n```swift\nlet value = 42\n```\n\n| Name | Value |\n| --- | --- |\n| **Bold** | 2 |\n"
-                doc.text = text
-                controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
-                defer { doc.close() }
-                guard let editor = doc.editor, let host = editor.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
-                host.workspace = root
-                try waitUntil { editor.canSynchronize && host.sidebar.folder != nil }
-                host.sidebar.state.mode = .files; host.sidebar.state.collapsed = false
-                @MainActor func awaitNativeEvents(_ condition: () -> Bool) throws {
-                    try waitUntil {
-                        while let event = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
-                            NSApp.sendEvent(event)
-                        }
-                        return condition()
-                    }
-                }
-                let activationPolicy = NSApp.activationPolicy()
-                NSApp.setActivationPolicy(.regular)
-                defer { NSApp.setActivationPolicy(activationPolicy) }
-                let applicationDelegate = NSApp.delegate
-                NSApp.delegate = nil
-                NSApp.finishLaunching()
-                NSApp.delegate = applicationDelegate
-                if #available(macOS 14, *) {
-                    NSApp.activate()
-                } else {
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-                RunLoop.current.run(until: Date().addingTimeInterval(1))
-                // The direct CLI fixture needs this compatibility activation path before dispatching AppKit events.
-                // Empty options were independently measured to leave it inactive on this host.
-                NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
-                try awaitNativeEvents { NSApp.isActive }
-                window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor.webView)
-                var selected = false
-                editor.webView.evaluateJavaScript("app.view.dispatch({selection:{anchor:24,head:28}}); app.view.focus(); true") { _, _ in selected = true }
-                try waitUntil { selected }
-                var focused = false
-                try awaitNativeEvents { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return focused }
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-                @MainActor func snapshot(_ name: String) throws {
-                    var result: Result<NSImage, Error>?
-                    editor.webView.takeSnapshot(with: nil) { image, error in
-                        if let image {
-                            result = .success(image)
-                        } else {
-                            result = .failure(error ?? CocoaError(.featureUnsupported))
-                        }
-                    }
-                    try waitUntil { result != nil }
-                    let image = try result!.get()
-                    guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
-                    try data.write(to: Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name))
-                }
-                try snapshot("preview-focused.png")
-                window.makeFirstResponder(host.sidebar.filterField)
-                try awaitNativeEvents { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return !focused }
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-                try snapshot("preview-unfocused.png")
-                try expect(doc.text == text && !doc.isDocumentEdited, "Focus or rendering changed fixture Markdown")
-            }
             test("Native marked text and committed typing retain the table cell and its caret") {
                 let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
                 doc.recoveryStore = recoveryStore
@@ -1153,6 +1089,71 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 try expect(!hidden, "Reloading from disk hid the editor")
                 result = nil
                 try waitUntil { poll("app.getMarkdown() === '# From disk\\n' && document.querySelector('#modified-dot').hidden && document.querySelector('#disk-banner').hidden") }
+            }
+            // Complete CLI-host activation last, after tests that use the original RunLoop-only host.
+            test("Focused and unfocused preview fixtures retain bytes and capture their presentation") {
+                let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                doc.recoveryStore = recoveryStore
+                let text = "# Preview fixture\n\n- First **bold** item\n  - Nested item\n- [ ] A task\n\n> A short quote\n\n```swift\nlet value = 42\n```\n\n| Name | Value |\n| --- | --- |\n| **Bold** | 2 |\n"
+                doc.text = text
+                controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
+                defer { doc.close() }
+                guard let editor = doc.editor, let host = editor.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+                host.workspace = root
+                try waitUntil { editor.canSynchronize && host.sidebar.folder != nil }
+                host.sidebar.state.mode = .files; host.sidebar.state.collapsed = false
+                @MainActor func awaitNativeEvents(_ condition: () -> Bool) throws {
+                    try waitUntil {
+                        while let event = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                            NSApp.sendEvent(event)
+                        }
+                        return condition()
+                    }
+                }
+                let activationPolicy = NSApp.activationPolicy()
+                NSApp.setActivationPolicy(.regular)
+                defer { NSApp.setActivationPolicy(activationPolicy) }
+                let applicationDelegate = NSApp.delegate
+                NSApp.delegate = nil
+                NSApp.finishLaunching()
+                NSApp.delegate = applicationDelegate
+                if #available(macOS 14, *) {
+                    NSApp.activate()
+                } else {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(1))
+                // The direct CLI fixture needs this compatibility activation path before dispatching AppKit events.
+                // Empty options were independently measured to leave it inactive on this host.
+                NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+                try awaitNativeEvents { NSApp.isActive }
+                window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor.webView)
+                var selected = false
+                editor.webView.evaluateJavaScript("app.view.dispatch({selection:{anchor:24,head:28}}); app.view.focus(); true") { _, _ in selected = true }
+                try waitUntil { selected }
+                var focused = false
+                try awaitNativeEvents { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return focused }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                @MainActor func snapshot(_ name: String) throws {
+                    var result: Result<NSImage, Error>?
+                    editor.webView.takeSnapshot(with: nil) { image, error in
+                        if let image {
+                            result = .success(image)
+                        } else {
+                            result = .failure(error ?? CocoaError(.featureUnsupported))
+                        }
+                    }
+                    try waitUntil { result != nil }
+                    let image = try result!.get()
+                    guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+                    try data.write(to: Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name))
+                }
+                try snapshot("preview-focused.png")
+                window.makeFirstResponder(host.sidebar.filterField)
+                try awaitNativeEvents { editor.webView.evaluateJavaScript("app.view.hasFocus") { result, _ in focused = result as? Bool == true }; return !focused }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                try snapshot("preview-unfocused.png")
+                try expect(doc.text == text && !doc.isDocumentEdited, "Focus or rendering changed fixture Markdown")
             }
         } else {
             print("SKIP Full AppKit Open/Save and visible-menu checks require a desktop session: ./scripts/test-native.sh --ui")

@@ -240,6 +240,11 @@
       press(editing(), key);
       assert(editing() === cell(2, 1) && app.getMarkdown() === tableText, 'Down at last row changed table');
     }
+    press(editing(), 'ArrowUp');
+    assert(editing() === cell(1, 1), 'ArrowUp did not leave the last row');
+    press(editing(), 'ArrowUp');
+    assert(editing() === cell(0, 1), 'ArrowUp did not reach the header');
+    press(editing(), 'ArrowDown'); press(editing(), 'ArrowDown');
     for (const modifier of ['metaKey', 'ctrlKey', 'altKey']) {
       for (const key of ['Tab', 'Enter', 'ArrowUp', 'ArrowDown']) {
         const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, [modifier]: true });
