@@ -14,8 +14,6 @@ export { parseMixed } from '@lezer/common';
 // Fenced code highlighting for every language CodeMirror knows. Each language
 // loads through a dynamic import, which the single-file bundle inlines.
 export { languages as codeLanguages } from '@codemirror/language-data';
-// Comparing the document with a newer version of its file on disk.
-export { unifiedMergeView, getChunks, getOriginalDoc, originalDocChangeEffect } from '@codemirror/merge';
 export { default as MarkdownIt } from 'markdown-it';
 export { default as DOMPurify } from 'dompurify';
 // Pasted HTML to Markdown. The browser build parses with the page's DOM.

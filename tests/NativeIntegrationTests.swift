@@ -202,20 +202,13 @@ final class FakeDrop: NSObject, NSDraggingInfo {
         let settingsSuite = "margin-settings-tests-\(UUID().uuidString)"
         let settingsDefaults = UserDefaults(suiteName: settingsSuite)!
         defer { settingsDefaults.removePersistentDomain(forName: settingsSuite) }
-        test("Settings default to Auto appearance and the Night icon, and persist choices") {
+        test("Settings default to Auto appearance and persist choices") {
             let settings = Settings(defaults: settingsDefaults)
-            try expect(settings.appearance == .auto && settings.appIcon == .night, "Unexpected default settings")
-            settings.appearance = .dark; settings.appIcon = .serif
+            try expect(settings.appearance == .auto, "Unexpected default settings")
+            settings.appearance = .dark
             let reloaded = Settings(defaults: settingsDefaults)
-            try expect(reloaded.appearance == .dark && reloaded.appIcon == .serif, "Settings did not persist")
-            settingsDefaults.set("missing", forKey: "appIcon")
-            try expect(reloaded.appIcon == .night, "Unknown icon did not fall back to Night")
+            try expect(reloaded.appearance == .dark, "Settings did not persist")
             settingsDefaults.removePersistentDomain(forName: settingsSuite)
-        }
-        test("Every icon choice is bundled and only Night uses the bundle icon") {
-            for choice in AppIconChoice.allCases { try expect(choice.image != nil, "Missing bundled icon: \(choice.rawValue)") }
-            try expect(AppIconChoice.night.dockImage == nil, "Night should restore the bundle icon")
-            try expect(AppIconChoice.allCases.filter { $0 != .night }.allSatisfy { $0.dockImage != nil }, "A choice has no Dock image")
         }
         test("Settings is in the app menu on ⌘,") {
             let bar = delegate.makeMenu()
@@ -272,13 +265,9 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let settings = Settings(defaults: settingsDefaults)
             var changes = 0
             let window = SettingsWindowController(settings: settings) { changes += 1 }
-            try expect(window.iconTiles.count == AppIconChoice.allCases.count, "Not every icon is offered")
             window.appearanceControl.selectedSegment = AppearanceChoice.allCases.firstIndex(of: .light)!
             window.appearanceChanged(window.appearanceControl)
-            let quote = NSButton(); quote.tag = AppIconChoice.allCases.firstIndex(of: .quote)!
-            window.iconChosen(quote)
-            try expect(settings.appearance == .light && settings.appIcon == .quote && changes == 2, "Settings window did not apply choices")
-            try expect(window.iconTiles[.quote]?.fillColor != .clear && window.iconTiles[.night]?.fillColor == .clear, "Selection highlight is wrong")
+            try expect(settings.appearance == .light && changes == 1, "Settings window did not apply appearance")
             settingsDefaults.removePersistentDomain(forName: settingsSuite)
         }
         test("Collapsing a folder keeps the tree and remembers the folders open inside it, unless Option closed them") {
@@ -331,33 +320,13 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             let settings = Settings(defaults: settingsDefaults)
             let themed = AppDelegate(controller: controller, recoveryStore: recoveryStore, settings: settings)
             defer { settingsDefaults.removePersistentDomain(forName: settingsSuite); delegate.applySettings() }
-            settings.appearance = .dark; settings.appIcon = .ruled
+            settings.appearance = .dark
             let doc = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
             doc.recoveryStore = recoveryStore
             controller.addDocument(doc); doc.makeWindowControllers(); doc.showWindows()
             defer { doc.close() }
             themed.applySettings()
             try expect(application?.appearance?.name == .darkAqua, "App appearance is not dark")
-            // AppKit re-renders the Dock icon, so compare drawn pixels with a tolerance.
-            func pixels(_ image: NSImage?) -> [UInt8] {
-                guard let image, let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-                      let context = NSGraphicsContext(bitmapImageRep: bitmap), let data = bitmap.bitmapData else { return [] }
-                NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
-                image.draw(in: NSRect(x: 0, y: 0, width: 32, height: 32))
-                NSGraphicsContext.restoreGraphicsState()
-                return Array(UnsafeBufferPointer(start: data, count: bitmap.bytesPerRow * 32))
-            }
-            func distance(_ a: [UInt8], _ b: [UInt8]) -> Double {
-                a.count == b.count && !a.isEmpty ? zip(a, b).map { abs(Double($0) - Double($1)) }.reduce(0, +) / Double(a.count) : .infinity
-            }
-            let ruled = pixels(AppIconChoice.ruled.image)
-            let dock = pixels(application?.applicationIconImage)
-            let nearest = AppIconChoice.allCases.min { distance(dock, pixels($0.image)) < distance(dock, pixels($1.image)) }
-            try expect(nearest == .ruled, "Dock icon is not the chosen icon (closest: \(nearest?.rawValue ?? "none"))")
-            let chosenDistance = distance(dock, ruled)
-            try expect(chosenDistance < 2, "Dock icon differs from the chosen icon by \(chosenDistance)")
-            settings.appIcon = .night; themed.applySettings()
-            try expect(distance(pixels(application?.applicationIconImage), ruled) > 10 * max(chosenDistance, 0.5), "Choosing Night did not restore the bundle icon")
             guard let editor = doc.editor else { throw CocoaError(.fileReadUnknown) }
             try waitUntil { editor.canSynchronize && !editor.webView.isHidden }
             var bodyTheme: String?
@@ -889,11 +858,9 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             try waitUntil { doc.diskConflict?.text == "# Changed elsewhere\nTheir edit\n" }
             result = nil
             try waitUntil { poll("!document.querySelector('#disk-banner').hidden && app.getMarkdown() === '# Changed elsewhere\\nMy edit\\n'") }
-            try run("document.querySelector('#disk-compare').click()")
-            try waitUntil { poll("app.isComparing() && document.querySelectorAll('.cm-deletedChunk').length === 1") }
-            try run("document.querySelector('#compare-keep-mine').click()")
+            try run("document.querySelector('#disk-keep-mine').click()")
             try waitUntil { !doc.isDocumentEdited && doc.diskConflict == nil }
-            try expect(try String(contentsOf: url, encoding: .utf8) == "# Changed elsewhere\nMy edit\n", "Keep mine for all did not save the edits")
+            try expect(try String(contentsOf: url, encoding: .utf8) == "# Changed elsewhere\nMy edit\n", "Overwrite did not save the edits")
             try waitUntil { poll("document.querySelector('#modified-dot').hidden && document.querySelector('#disk-banner').hidden") }
             try run("app.view.dispatch({ changes: { from: 0, insert: 'Discard me\\n' } })")
             try waitUntil { doc.isDocumentEdited }

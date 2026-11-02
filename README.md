@@ -23,7 +23,7 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding
 - A native sidebar that runs the full window height, with the open files, the workspace folder tree and its filter, and a clickable document outline. It stays as it is while switching documents: whether it is shown, its width, Files or Outline, opened folders, and the filter. Its toggle sits at its top, and moves to the toolbar while the sidebar is hidden.
 - Native Open, Open Recent, Save, Save As, autosave, undo/redo, and unsaved-document handling.
 - A window holds several documents and shows one at a time; the sidebar's Open Files lists them. Click one to switch, × to close it, or drag to reorder; ⌘⇧[ and ⌘⇧] go to the previous and next. A new or opened document goes after the current one. Each window has its own list (File › New Window), and windows come back at launch with their documents in order, including unsaved untitled ones.
-- Files changed by another application reload automatically when there are no unsaved changes. With unsaved changes, a banner offers Reload, Keep mine, or Compare, which shows each disk change inline in source mode to keep or take one at a time or all at once.
+- Files changed by another application reload automatically when there are no unsaved changes. With unsaved changes, a banner offers Reload, Overwrite, or Save As to preserve the edits in another file.
 - Find and replace, optionally with regular expressions (`$1`, `$&`, and `$<name>` in replacements), and Go to Line (`line` or `line:column`; also opened by clicking the cursor position in the status bar).
 - Fenced code blocks are syntax highlighted in the language their info string names, for every language CodeMirror ships.
 - `mermaid` code fences render as diagrams (with [Pele](https://github.com/obsidianmd/pele)) in the editor, HTML export, and printing, in the theme's colors. Clicking a diagram shows its source; a diagram that cannot render stays a code block, labeled with its error.
@@ -34,7 +34,7 @@ After rebuilding, quit the running copy with ⌘Q and reopen the app; rebuilding
 - Right-click the workspace in the sidebar to create a file, rename one in place, or show it in Finder. Renaming a file that is open keeps it open with its unsaved edits.
 - Word and character counts, line counts, estimated reading time, and the cursor's line and column.
 - Text zoom for the document text, remembered across windows and launches.
-- Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS) and a choice of six Dock icons. The bundled icon shown in Finder is always Night.
+- Settings (⌘,) for Light, Dark, and Auto appearance (follows macOS).
 - Typewriter scrolling.
 - HTML export and native printing with Save as PDF.
 - Local images underneath the Markdown file's directory. Dropped or pasted image files are embedded as data URLs; no upload service is used.
@@ -67,7 +67,7 @@ The standard macOS shortcuts also work: ⌘X / ⌘C / ⌘V, ⌘A, ⌘M, ⌘H, �
 
 In the find bar, Enter and ⇧Enter go to the next and previous match, Enter in the replace field replaces one, and Esc closes it. In Quick Open, ↑ and ↓ choose, Enter opens, and Esc closes. While renaming in the sidebar, Enter keeps the name and Esc cancels. Table cells have their own keys, listed above.
 
-Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open in the current window, after the current document. The workspace list refreshes when Margin becomes the active app, or with its refresh button. The last workspace, appearance, app icon, and text zoom are remembered.
+Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open in the current window, after the current document. The workspace list refreshes when Margin becomes the active app, or with its refresh button. The last workspace, appearance and text zoom are remembered.
 
 ## Implementation
 
@@ -84,10 +84,10 @@ Command-click links to open them. New documents, File → Open, Open Recent, Fin
 - `web/src/style.css`: writing typography, application layout, themes, and print styles.
 - `web/vendor/`: `codemirror.bundle.js` (CodeMirror 6 with GFM Markdown parsing and every CodeMirror code language, markdown-it, DOMPurify, and Turndown), built from the exact versions pinned in `package.json`, with every bundled package's license in `codemirror.bundle.LICENSES.txt`.
 - `tools/editor-bundle/` and `scripts/build-editor.sh` (`npm run build:editor`): rebuild the vendored bundle with Rollup. Only needed after changing the bundle entry or a dependency version, and the only step that needs `npm install` (Node.js 20 or later).
-- `Resources/`: editable welcome document, Info.plist, the bundle icon, and the icon choices in `Resources/Icons/`.
+- `Resources/`: editable welcome document, Info.plist, and the bundle icon.
 - `scripts/build.sh`: compiles Swift, copies web assets into the app bundle, and applies an ad hoc signature.
 
-For Swift changes, rebuild the app. Web files are copied during every build. Run `./scripts/make-icon.sh` to regenerate the bundle icon and the icon choices from the Core Graphics source.
+For Swift changes, rebuild the app. Web files are copied during every build. Run `./scripts/make-icon.sh` to regenerate the bundle icon from the Core Graphics source.
 
 ## Tests
 
@@ -107,7 +107,7 @@ Edits are sent to the native document as they happen. Recovery copies are writte
 
 On launch, recovery copies open as unsaved documents named `Recovered …`, without overwriting the original files. Identical documents already restored are not duplicated. Save As lets you choose the destination. Successful saves, Revert, and intentional document closes remove the corresponding recovery copy. Damaged recovery files are reported and retained for inspection.
 
-When another application changes an open file, a document without unsaved changes reloads and shows "Reloaded from disk". One with unsaved changes keeps its text and shows a banner. Reload asks before discarding the edits. Keep mine saves the edits over the disk version without AppKit's "changed by another application" alert, which still appears if the file changes again before saving. Compare switches to source mode and shows the disk version above each changed part of your text; resolving the last change, or choosing Use disk version for all or Keep mine for all, saves the result. Cancel leaves the edits unsaved and the banner in place. A newer disk version during a comparison updates it in place. While the banner is unresolved, periodic autosave waits; closing or quitting still autosaves and shows AppKit's alert. macOS does not report another application's write that lands within about half a second of Margin's own save, so the app checks the file again 1.5 seconds after each save. Reloading clears the undo history.
+When another application changes an open file, a document without unsaved changes reloads and shows "Reloaded from disk". One with unsaved changes keeps its text and shows a banner. Reload asks before discarding the edits. Overwrite saves the edits over the disk version without AppKit's “changed by another application” alert, which still appears if the file changes again before saving. Save As opens the normal save panel to save the edits in another file; cancellation leaves the conflict unresolved. While the banner is unresolved, periodic autosave waits; closing or quitting still autosaves and shows AppKit's alert. macOS does not report another application's write that lands within about half a second of Margin's own save, so the app checks the file again 1.5 seconds after each save. Reloading clears the undo history.
 
 Save and Save As read the editor's current text first when the editor is available. The failure view saves only the last text the app received, which it displays.
 

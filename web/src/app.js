@@ -11,10 +11,9 @@
     else toast('Open the macOS app to use native file operations.');
   };
   const welcome = '# A little room to think.\n\nWelcome to **Margin**. A quiet place for your notes, ideas, and everything in between.\n\n## Just start writing\n\nYour words take shape as you type. Use Markdown shortcuts for headings, **bold**, *italics*, and lists — the formatting appears right here on the page.\n\n> The secret of getting ahead is getting started.\n\n## Make yourself at home\n\n- Open a Markdown file with **⌘O**\n- Browse a folder with **⇧⌘O**\n- Switch to source mode with **⌘/**\n- Save your work with **⌘S**\n\n### A few things to try\n\n- [x] Find a little space to write\n- [ ] Put an idea into words\n- [ ] Make something worth keeping\n\n## For the details\n\nCode, tables, links, and images all have a place here.\n\n```swift\nlet thought = "Something worth writing down."\nprint(thought)\n```\n\n| Shortcut | A small superpower |\n| --- | --- |\n| ⌘B | A little emphasis |\n| ⌘F | Find the right words |\n\n---\n\nTake your time. The page is yours.\n';
-  const { EditorState, EditorSelection, ChangeSet, Compartment, Annotation, Prec, EditorView, keymap, placeholder, drawSelection,
+  const { EditorState, EditorSelection, Compartment, Annotation, Prec, EditorView, keymap, placeholder, drawSelection,
     defaultKeymap, indentWithTab, markdown, markdownLanguage, codeLanguages, syntaxTree, ensureSyntaxTree, syntaxHighlighting, languageDataProp,
-    tags, tagHighlighter, closeBrackets, closeBracketsKeymap, yamlLanguage, parseMixed,
-    unifiedMergeView, getChunks, getOriginalDoc, originalDocChangeEffect } = MarginEditor;
+    tags, tagHighlighter, closeBrackets, closeBracketsKeymap, yamlLanguage, parseMixed } = MarginEditor;
   let raw = native ? '' : sessionStorage.getItem('margin-draft') ?? welcome;
   let sourceMode = false;
   let currentPath = '';
@@ -25,9 +24,6 @@
   let refreshTimer;
   let activeMatch = -1;
   let insertKind = 'link';
-  // The file's text on disk while it differs from unsaved edits, and the mode to restore after comparing them.
-  let diskText = null;
-  let comparing = null;
 
   // In the app, WebKit matches this to the window's appearance, which follows Settings.
   const systemAppearance = window.matchMedia('(prefers-color-scheme: dark)');
@@ -38,7 +34,6 @@
   // Text that arrives from the app is not an edit to report back to it.
   const fromApp = Annotation.define();
   const preview = new Compartment();
-  const comparison = new Compartment();
   function readImages(files) {
     return Promise.all(files.map(file => new Promise(resolve => {
       const reader = new FileReader();
@@ -136,12 +131,9 @@
       EditorView.contentAttributes.of({ spellcheck: 'true', 'aria-label': 'Markdown document' }),
       placeholder('Begin anywhere…'),
       preview.of(MarginLivePreview.extension),
-      comparison.of([]),
       keymap.of([...closeBracketsKeymap, indentWithTab, ...defaultKeymap]),
       EditorView.updateListener.of(update => {
         if (update.docChanged && !update.transactions.some(tr => tr.annotation(fromApp))) changed(update.state.doc.toString());
-        // The comparison can finish with a view update of its own, which cannot start inside this one.
-        if (comparing) queueMicrotask(updateComparison);
         if (update.selectionSet || update.docChanged) updateCursorPosition(update.state);
         if (update.selectionSet && document.body.classList.contains('typewriter') && update.view.hasFocus) {
           setTimeout(() => view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: 'center' }) }));
@@ -277,72 +269,10 @@
   }
   // Native sends the disk text while it conflicts with unsaved edits, and null once resolved.
   function setDiskText(text) {
-    diskText = typeof text === 'string' ? text : null;
-    if (comparing && diskText === null) endComparison();
-    else if (comparing) {
-      const original = getOriginalDoc(view.state).toString();
-      const change = spanChange(original, diskText);
-      if (!change) return;
-      view.dispatch({ effects: originalDocChangeEffect(view.state, ChangeSet.of(change, original.length)) });
-      toast('The file changed on disk again. The comparison now shows the newest version.');
-      return;
-    }
-    $('#disk-banner').hidden = diskText === null;
+    $('#disk-banner').hidden = typeof text !== 'string';
   }
   function keepMine() {
-    $('#disk-banner').hidden = true;
     post('diskKeepMine');
-  }
-  // In a unified merge view the document is your text and the original is the
-  // disk's, so accepting a change keeps yours and rejecting it takes the disk's.
-  function chunkButton(type, action) {
-    const button = document.createElement('button');
-    button.name = type;
-    button.textContent = type === 'accept' ? 'Keep mine' : 'Use disk version';
-    button.onmousedown = action;
-    return button;
-  }
-  // Comparing uses source mode, where no live preview widgets sit among the changes.
-  function startComparison() {
-    if (diskText === null || comparing) return;
-    comparing = { wasSource: sourceMode };
-    toggleSource(true);
-    closeMenus();
-    $('#disk-banner').hidden = true;
-    $('#compare-bar').hidden = false;
-    view.dispatch({ effects: comparison.reconfigure(unifiedMergeView({ original: diskText, gutter: false, syntaxHighlightDeletions: false, mergeControls: chunkButton })) });
-    const first = getChunks(view.state)?.chunks[0];
-    if (first) revealPosition(first.fromB);
-    updateComparison();
-  }
-  // Resolving the last change finishes the comparison.
-  function updateComparison() {
-    if (!comparing) return;
-    const count = getChunks(view.state)?.chunks.length ?? 0;
-    if (!count) { finishComparison(); return; }
-    $('#compare-status').textContent = `${count} ${count === 1 ? 'change differs' : 'changes differ'} from the disk version, which is shown above your text.`;
-  }
-  function endComparison() {
-    const { wasSource } = comparing;
-    comparing = null;
-    view.dispatch({ effects: comparison.reconfigure([]) });
-    $('#compare-bar').hidden = true;
-    toggleSource(wasSource);
-  }
-  function finishComparison() {
-    endComparison();
-    keepMine();
-  }
-  function useDiskForAll() {
-    if (!comparing) return;
-    const change = spanChange(view.state.doc.toString(), getOriginalDoc(view.state).toString());
-    if (change) view.dispatch({ changes: change, userEvent: 'revert' });
-    finishComparison();
-  }
-  function cancelComparison() {
-    if (!comparing) return;
-    endComparison();
-    $('#disk-banner').hidden = diskText === null;
   }
   function updateMetadata(data) {
     currentPath = data.path || '';
@@ -598,8 +528,7 @@
   // Printing shows the rendered document, not the editor with its markers.
   function preparePrint() { $('#print-view').innerHTML = MarginMarkdown.renderDocument(raw); }
   function command(name, value) {
-    if (name === 'source' && comparing) toast('Finish or cancel the comparison to leave source mode.');
-    else if (name === 'source') toggleSource();
+    if (name === 'source') toggleSource();
     else if (name === 'sidebar') document.body.classList.toggle('sidebar-open', Boolean(value?.open));
     else if (name === 'reveal') revealPosition(Number(value), 'start');
     else if (name === 'find') showFind();
@@ -666,12 +595,10 @@
   $('#find-close').onclick = () => { $('#find-bar').hidden = true; view.focus(); };
   $('#disk-reload').onclick = () => post('diskReload');
   $('#disk-keep-mine').onclick = keepMine;
-  $('#disk-compare').onclick = startComparison;
-  $('#compare-use-disk').onclick = useDiskForAll;
-  $('#compare-keep-mine').onclick = finishComparison;
-  $('#compare-cancel').onclick = cancelComparison;
+  $('#disk-save-as').onclick = () => post('diskSaveAs');
+
   const snapshot = () => ({ text: raw, token: documentToken, revision: editRevision });
-  window.app = { load: loadDocument, command, getMarkdown: () => raw, snapshot, getHTML: () => MarginMarkdown.renderDocument(raw), headings, view, isSource: () => sourceMode, isComparing: () => Boolean(comparing), preparePrint, welcome };
+  window.app = { load: loadDocument, command, getMarkdown: () => raw, snapshot, getHTML: () => MarginMarkdown.renderDocument(raw), headings, view, isSource: () => sourceMode, preparePrint, welcome };
   // Resolves local images through the restricted native asset handler, while keeping
   // the Markdown URLs themselves relative and portable.
   if (native) {

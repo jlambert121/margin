@@ -169,6 +169,25 @@ import UniformTypeIdentifiers
             try wait("Keep mine did not save") { !doc.isDocumentEdited }
             try expect(try diskText(url) == "# My edits\n" && doc.diskConflict == nil, "Keep mine did not write the edits over the disk version")
         }
+        test("Save As preserves the disk version and saves conflicted edits to another file") {
+            let (doc, original) = try openFile("Conflicted.md", "# Original\n")
+            defer { doc.close() }
+            try edit(doc, "# My edits\n")
+            try writeElsewhere(Data("# Their edits\n".utf8), to: original)
+            try checkDisk(doc)
+            try expect(doc.diskConflict != nil, "No conflict detected")
+            let destination = root.appendingPathComponent("My copy.md")
+            var finished = false
+            var failure: Error?
+            doc.save(to: destination, ofType: markdownType, for: .saveAsOperation) { error in
+                failure = error; finished = true
+            }
+            try wait("Save As did not finish") { finished }
+            if let failure { throw failure }
+            try expect(try diskText(original) == "# Their edits\n", "Save As overwrote the original disk version")
+            try expect(try diskText(destination) == "# My edits\n", "Save As lost the unsaved edits")
+            try expect(doc.fileURL == destination && !doc.isDocumentEdited && doc.diskConflict == nil, "Save As did not resolve the conflict at the new path")
+        }
         test("Reload replaces unsaved edits with the disk version") {
             let (doc, url) = try openFile("Discard.md", "# Original\n")
             defer { doc.close() }

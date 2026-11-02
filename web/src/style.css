@@ -11,10 +11,6 @@
   --select:#e6ece5;
   --code:#f5f6f3;
   --notice:#f8f4e6;
-  --diff-disk:#f7e6e2;
-  --diff-disk-mark:#d9786a;
-  --diff-mine:#e5efe3;
-  --diff-mine-mark:#6fa067;
   --code-keyword:#8b3f73;
   --code-string:#3d7a52;
   --code-number:#a35a1c;
@@ -688,49 +684,6 @@ body.sidebar-open #toggle-sidebar,body.sidebar-open .toolbar-left .divider {
   color:var(--paper)
 }
 
-#editor .cm-changedLine {
-  background:var(--diff-mine)
-}
-
-#editor .cm-changedText {
-  background:linear-gradient(var(--diff-mine-mark),var(--diff-mine-mark)) bottom/100% 2px no-repeat
-}
-
-#editor .cm-deletedChunk {
-  position:relative;
-  background:var(--diff-disk);
-  padding:2px 0 2px 6px
-}
-
-#editor .cm-deletedChunk .cm-deletedText {
-  background:linear-gradient(var(--diff-disk-mark),var(--diff-disk-mark)) bottom/100% 2px no-repeat
-}
-
-#editor .cm-deletedChunk .cm-chunkButtons {
-  top:3px;
-  inset-inline-end:6px;
-  display:flex;
-  gap:4px;
-  z-index:1
-}
-
-#editor .cm-deletedChunk button {
-  margin:0;
-  padding:1px 8px;
-  border:1px solid var(--line);
-  background:var(--paper);
-  color:var(--text);
-  font:11px/1.7 -apple-system,BlinkMacSystemFont,sans-serif
-}
-
-#editor .cm-deletedChunk button[name=reject] {
-  order:-1
-}
-
-#editor .cm-deletedChunk button:hover {
-  background:var(--hover)
-}
-
 #toast {
   position:fixed;
   bottom:52px;
@@ -821,10 +774,6 @@ body[data-theme=dark] {
   --code:#292f2a;
   --accent:#a2b99a;
   --notice:#2e2c23;
-  --diff-disk:#3a2926;
-  --diff-disk-mark:#c7766a;
-  --diff-mine:#26362a;
-  --diff-mine-mark:#7fae76;
   --code-keyword:#d19bd0;
   --code-string:#a5c98e;
   --code-number:#e0a46b;
@@ -842,9 +791,6 @@ body[data-theme=dark] {
   #editor .cm-content {
     padding-left:32px;
     padding-right:32px
-  }
-  .encoding {
-    display:none
   }
 }
 

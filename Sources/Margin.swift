@@ -730,6 +730,7 @@ final class DocumentEditor: NSObject, WKScriptMessageHandler, WKNavigationDelega
         case "save": doc.save(nil)
         case "diskReload": doc.confirmReloadFromDisk()
         case "diskKeepMine": doc.keepMine()
+        case "diskSaveAs": doc.saveAs(nil)
         case "saveAs": doc.saveAs(nil)
         case "print": printDocument(nil)
         case "exportHTML": if let html = body["html"] as? String { exportHTML(html) }
@@ -1236,7 +1237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func applySettings() {
         NSApp?.appearance = settings.appearance.appearance
-        NSApp?.applicationIconImage = settings.appIcon.dockImage
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()

@@ -7,7 +7,6 @@ mkdir -p "$TEST_APP/Contents/MacOS"
 mkdir -p "$TEST_APP/Contents/Resources"
 cp Resources/Welcome.md "$TEST_APP/Contents/Resources/Welcome.md"
 rsync -a --delete web/ "$TEST_APP/Contents/Resources/web/"
-rsync -a --delete Resources/Icons/ "$TEST_APP/Contents/Resources/Icons/"
 python3 - "$TEST_APP/Contents/Info.plist" <<'PY'
 import plistlib, sys
 with open('Resources/Info.plist', 'rb') as source:
