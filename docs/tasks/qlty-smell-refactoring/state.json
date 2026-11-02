@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "status": "prepared",
+  "originalSha256": "1aa8e806c1f1d1102d20ac57bdd74c5fafcf6caee93a41fd70d9352769ff1520",
+  "rounds": [
+    {
+      "number": 1,
+      "reviewer": "Fresh delegated session /root/smells_review1 (fork_turns=none)",
+      "summary": "Found two behavior-preservation blockers and one minor coverage claim; all proposed resolutions independently confirmed in Round 2 and incorporated after convergence.",
+      "findings": [
+        {
+          "id": "F-1",
+          "severity": "blocking",
+          "summary": "Shortcut field-isolation requirement would change existing global shortcut behavior.",
+          "evidence": "S-4 blanket field isolation conflicts with web/src/app.js guards: undo/bold/italic/link use inDocument but heading/application branches remain global.",
+          "status": "incorporated",
+          "resolution": "Preserved branch-specific inDocument/global shortcut scope, modifiers, capture and propagation; extended AC-4 with document/find/dialog target assertions."
+        },
+        {
+          "id": "F-2",
+          "severity": "blocking",
+          "summary": "Same-shape table fast path omits pending-focus exception.",
+          "evidence": "web/src/table-editor.js render requires editing && same shape && !focusAfterRender; row/column moves can request focus without changing shape.",
+          "status": "incorporated",
+          "resolution": "Preserved editing && same shape && no pending focus fast path, pending-focus precedence/consumption, null defaults and upper clamps; extended AC-8 with same-shape move destination/typing assertions."
+        },
+        {
+          "id": "F-3",
+          "severity": "minor",
+          "summary": "Existing session-unit and outgoing JS tests do not prove Swift message-routing guards.",
+          "evidence": "tests/DocumentTests.swift invokes EditorSession directly; tests/bridge.test.js uses a no-op native sink; Sources/Margin.swift owns production frame/lifetime/payload/session checks.",
+          "status": "incorporated",
+          "resolution": "Corrected session-unit/outgoing-JS coverage claims; AC-2 requires focused production routing guard tests if routing is extracted, without duplicating logic in test-only code."
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "reviewer": "Fresh delegated session /root/smells_review2 (fork_turns=none)",
+      "summary": "Confirmed all three proposed dispositions resolve prior issues; no new findings or blockers. Critique converged before synthesis.",
+      "findings": []
+    }
+  ],
+  "finalReview": "Synthesized after independent Round 2 convergence; reviewed final spec against original intent, all eight unchanged Qlty findings, accepted F-1/F-2/F-3 dispositions, inspected source/test/build contracts and one-to-one AC-1 through AC-9 validation mappings. Original intent and original SHA-256 remain exact. Shortcut target routing preserves existing editor/global scope; table redraw retains the pending-focus exception; native routing validation now distinguishes session unit policy, outgoing protocol tests and actual production checks. All findings resolved and Open decisions is None. Domain splits, existing runtime/protocol/persistence/undo semantics, measured fallback boundaries, strict threshold targets and no-suppression requirement remain. No application code was changed. Scores for extracted files, full regression/build outcomes, desktop caret/composition and visual/native interactions remain future implementation evidence, not results established by preparation. Existing eight smells remain until implementation; unrelated workspace execution tooling changes are outside scope.",
+  "preparedSpecSha256": "3b8a4e160768b588cf0968549c6f76796745bcf4f88c5a55c9a9c690925562ec"
+}

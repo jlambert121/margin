@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/module-cache.sh
+node --test tests/planning.test.mjs tests/execution.test.mjs
 node --check web/src/app.js
 node --check web/src/diagnostics.js
 node --check web/src/markdown.js

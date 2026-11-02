@@ -7,6 +7,7 @@
     "build": "./scripts/build.sh",
     "start": "./scripts/run.sh",
     "test": "./scripts/test.sh",
+    "test:loops": "node --test tests/planning.test.mjs tests/execution.test.mjs",
     "test:native": "./scripts/test-native.sh --ui",
     "test:webkit": "./scripts/test-webkit.sh",
     "build:editor": "./scripts/build-editor.sh",

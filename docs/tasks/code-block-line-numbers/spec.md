@@ -1,0 +1,71 @@
+# Code block line numbers
+
+## Original intent
+
+Add line numbers to code blocks.
+
+## Proposed behavior
+
+User-confirmed surface scope: live preview, HTML export, and print. Inferred proposal: show line numbers automatically in a gutter inside each code block on those surfaces, including while the live-preview selection reveals its Markdown fences. Number logical code lines from 1 independently in each block. Include blank code content lines; exclude opening and closing fences and the language label. Use parsed code content rather than physical document-line counts: empty content has zero lines; otherwise normalize newline delimiters for counting, split on newline, and discard exactly one terminal empty segment if present. This normalization is only for counting and must never change Markdown bytes. The rule is the same for closed and unclosed fences: a terminating newline is not an extra line, while an actual blank content line receives a number. Indented code counts only content assigned to the code block, including internal blank lines but excluding trailing separator lines. Strip nesting markers only when identifying parsed code content; preserve the underlying source.
+
+Exact fenced-block examples below use JSON source strings with escaped newlines. Preview, rendered HTML, and print DOM must agree on each sequence:
+
+| Markdown source (JSON string) | Number sequence |
+| --- | --- |
+| `"```\n"` | None |
+| `"```\n```\n"` | None |
+| `"```\nx"` | 1 |
+| `"```\nx\n"` | 1 |
+| `"```\nx\n```\n"` | 1 |
+| `"```\nx\n\n"` | 1, 2 (blank second line) |
+| `"```\nx\n\n```\n"` | 1, 2 (blank second line) |
+| `"```\n\n```\n"` | 1 (blank line) |
+
+Apply this to backtick and tilde fences, with or without a language, and indented code blocks identified by the existing Markdown parser, including blocks nested in lists or quotes. Preserve existing wrapping: a logical line receives one number aligned with its first visual row, and continuation rows remain aligned with the code text. Size each block's gutter for its largest number so transitions such as 9 to 10 and 99 to 100 do not overlap code.
+
+Numbers are presentation only. They do not become document text, clipboard content, search results, cursor columns, or separate keyboard focus stops. Editing, clicking code text, selection, native undo/redo, and saving continue to operate on the original Markdown. Numbers update after adding, deleting, or undoing code lines and after changing block boundaries. Inline code and YAML front matter are excluded. Rendered Mermaid diagrams have no numbers; Mermaid source shown for editing or because rendering failed follows ordinary fenced-code numbering.
+
+HTML export and print use the same local numbering and eligibility rules as live preview. Exported HTML must include the required markup and styles so numbering works when opened independently of Margin. Long output lines retain the existing output wrapping/overflow policy, with one number per logical line. Printed multipage blocks continue their numbering without restarting or overlapping code; numbers remain readable in print. Copying code from exported HTML excludes gutter numbers. Source mode remains unnumbered. No new setting or per-block syntax is proposed.
+
+## Non-goals
+
+- Application implementation in this drafting task.
+- Document-wide line numbers, custom starting values, highlighted line ranges, or a line-number visibility preference.
+- Changes to Markdown serialization, code syntax highlighting, wrapping policy, or Mermaid rendering.
+- Source-mode numbering.
+
+## Acceptance criteria
+
+- AC-1: Live preview, HTML export, and print display consecutive numbers starting at 1 for each fenced or indented code block, counting blank content lines and excluding fence markers and labels, with the empty and unclosed block behavior specified above. Nested blocks follow their parsed code content; adjacent blocks restart at 1. Use parsed fence markers to identify boundaries, including quote- or list-prefixed closing markers; do not classify a closing fence solely by a regex on the physical line.
+- AC-2: Numbers remain visible when a block is edited and update correctly after inserting or deleting lines, changing fence boundaries, and native undo/redo, without stale or duplicate numbers after focus or selection changes.
+- AC-3: In live preview, wrapped code lines receive a single number aligned with their first visual row; continuation rows align with the code text. Gutters fit at least three-digit numbers and remain legible without overlap or clipping across light/dark appearance, supported text zoom (50% to 300%), resizing, and scrolling.
+- AC-4: In the editor, numbering preserves code-text hit testing, keyboard navigation, range selection, indentation, and plain-text copying; copied selections contain the selected Markdown text only. Gutter numbers do not enter editor search results, cursor-column calculations, or keyboard focus order. Exported HTML copying is covered separately by AC-7; print has no editing or clipboard requirement.
+- AC-5: Rendering, focusing, and switching preview/source modes do not change Markdown, dirty the native document, or add undo steps. Saving and reopening preserves exactly the expected Markdown, including whitespace and blank lines, without inserted numbers.
+- AC-6: Inline code, front matter, and rendered Mermaid diagrams have no line-number gutter; visible Mermaid source uses ordinary fenced-code numbering. Source mode remains unnumbered, and returning to live preview restores correct numbers.
+- AC-7: Exported HTML displays styled line numbers when opened independently, and copying its selected rendered code text excludes gutter numbers, Markdown fences, and nesting markers. Print output includes legible line numbers with uninterrupted sequences across page breaks, without clipping or overlap. Outputs retain their own existing wrapping/overflow policy, with one number at the first visual row of each logical line and continuation rows aligned with code; print may relax the current pre-element break-inside avoidance to paginate oversized blocks. Both outputs preserve the existing code text, language labels where present, and Mermaid fallback behavior.
+
+## Validation
+
+- AC-1: WebKit automation; implementing agent adds fixtures and assertions to tests/editor.test.js and runs npm run test:webkit through tests/EditorTests.swift. Exercise backticks, tildes, unknown/absent language, indented blocks, list/quote nesting, blank lines, empty blocks, unclosed fences with/without a final newline, and multiple adjacent blocks. Assert exact sequences from every source example above in live-preview, app.getHTML(), and print-view DOM, and check the standalone export path in tests/bridge.test.js. Repeat representative cases with CRLF delimiters, quoted/list-prefixed closing fences, and indented code with internal versus trailing blank lines. Assert association with content lines and absence of fence/label numbers. Expected evidence: passing named cases and exact expected sequences; existing tests do not establish numbering coverage.
+- AC-2: WebKit automation plus native integration; implementing agent tests focus/selection transitions and line/fence edits in tests/editor.test.js, then adds a code-block-specific native undo/redo case in tests/NativeIntegrationTests.swift and runs npm run test:native in a macOS desktop session. Expected evidence: correct number sequences after each edit and undo/redo, matching Markdown snapshots, and no stale decorations. Existing native undo coverage is general editor typing, not numbered blocks.
+- AC-3: WebKit geometry assertions and visual inspection; implementing agent adds a long wrapped line and a 100-plus-line block, checks number/text coordinates and continuation alignment in tests/editor.test.js, and runs npm run test:webkit. A human or UI-capable agent then inspects the feature fixture in a desktop window at 50%, 100%, and 300% zoom in both appearances, narrow/wide windows, and after scrolling offscreen and back. Expected evidence: passing geometry checks and captured feature-specific screenshots with no clipping or overlap. The runner's existing final welcome-page screenshot alone is insufficient.
+- AC-4: Editor-only WebKit automation and native desktop interaction; implementing agent checks document selection offsets, cursor status, search results, and lack of focusable gutter elements in tests/editor.test.js. A human or UI-capable agent clicks code at several rows, uses arrow keys, Tab/Shift+Tab, drag selection, and Cmd+C, then pastes into a plain-text destination, including a partial selection and one spanning blocks. Expected evidence: correct caret placement, unchanged editing behavior, and exact copied text with no gutter numbers; synthetic DOM assertions alone do not prove the system clipboard path.
+- AC-5: WebKit, Swift document, and native integration checks; implementing agent asserts app.getMarkdown() and view.state.doc remain identical through render/focus/mode transitions, extends tests/DocumentTests.swift for numbered-block source round trips, and extends tests/NativeIntegrationTests.swift for clean-document status/undo after display-only actions and edit/save/reopen behavior. Run npm test and npm run test:native on macOS. Expected evidence: byte-identical no-edit round trips, edits matching their expected Markdown, unchanged dirty/undo state for presentation actions, and passing named native cases. Existing Swift round-trip tests validate the storage foundation but not the new UI path.
+- AC-6: WebKit regression automation; implementing agent extends tests/editor.test.js with inline-code, front-matter, valid/invalid Mermaid, source-toggle, HTML-rendering, and print fixtures, then runs npm run test:webkit. Assert numbers only on eligible visible code, exact source preservation, absence in source mode and excluded content types across preview/HTML/print, and restoration on returning to preview. Expected evidence: passing scope-specific cases alongside existing Mermaid/export/print tests.
+- AC-7: WebKit output automation plus browser/print visual inspection; implementing agent extends tests/editor.test.js and tests/bridge.test.js to check numbered fenced and indented code in app.getHTML(), exported HTML, and app.preparePrint(), including blank lines and invalid Mermaid. Run npm run test:webkit. A human or UI-capable agent opens an exported standalone HTML file, copies a code selection into plain text, and uses the native print flow to preview or save a PDF of a block long enough to span pages, in a narrow and a normal output width. Expected evidence: passing output DOM/text assertions, exact copied code without numbers, and inspected HTML/PDF captures showing legible numbers, correct continued sequences, and no clipped code. Existing export tests do not establish numbering or pagination correctness.
+
+## Code references and assumptions
+
+- web/src/live-preview.js: decorateFencedCode and decorateCodeBlock style parsed FencedCode and CodeBlock nodes using decorations. Fences are revealed when selection touches the block. decorateFrontmatter shares code-block styling, so selecting every .cm-md-codeblock element would incorrectly number metadata. Mermaid may replace an entire fence with a diagram widget or fall back to code. These paths were inspected; there is no existing line-number decoration here. The current physical-line closing-fence regex misses quote-prefixed markers, so numbering must use parsed CodeMark boundaries; unrelated Mermaid rendering changes remain outside scope.
+- web/src/style.css: code-block cards use per-line padding and a background pseudo-element behind selection; hidden fences have zero line height. Any gutter must coexist with these layers, indentation, and the existing theme/text-zoom variables. The precise decoration approach remains an implementation choice, subject to geometry and pointer checks. Print currently sets break-inside:avoid on pre; multipage code requires verifying and, where necessary, relaxing that constraint for oversized blocks.
+- web/src/app.js: EditorView.lineWrapping is enabled. toggleSource removes the live-preview extension; updateCursorPosition derives coordinates from the document. Document updates flow through the native bridge, and native undo/redo reloads Markdown. ExportHTML/getHTML/preparePrint use rendered document HTML rather than preview decorations.
+- web/src/markdown.js: document rendering uses markdown-it and a Mermaid fence renderer. Editor-only decorations do not automatically affect exported or printed HTML, so the confirmed output scope requires document-renderer and output-style changes in addition to live-preview decorations.
+- Sources/Margin.swift: MarkdownDocument owns reading, writing, dirty state, and native undo. Sources/EditorWindow.swift hosts WebKit. Presentation should not require a document-format or persistence change.
+- tests/editor.test.js and tests/EditorTests.swift: checked existing source-preservation, source-mode, zoom, paste, front-matter, Mermaid, HTML/print cases and the real WKWebView harness. No code-block line-number assertions currently exist. The harness can simulate focus and inspect DOM/geometry; clipboard and real pointer behavior need desktop verification.
+- tests/DocumentTests.swift: checked UTF-8/whitespace round trips, disk writes, and native undo tests. tests/NativeIntegrationTests.swift includes editor typing/native undo and settings zoom coverage. None proves the proposed numbering behavior yet.
+- scripts/test.sh, scripts/test-webkit.sh, package.json: npm test runs the general suite including Swift document and WebKit checks; npm run test:native adds the desktop UI path. These are future implementation validation steps, not results claimed by this draft. The implementation should also run npm run build and required repository Qlty checks.
+- Assumptions inferred from the short request: automatic visibility, local numbering from 1, both fenced and indented blocks, numbers while editing, and no new preference. Nested/blank-line details must follow actual parser code boundaries rather than textual fence matching; verify with the proposed fixtures during implementation.
+
+## Open decisions
+
+None

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "status": "prepared",
+  "originalSha256": "743e727f8263d5e56b35d5d035b2730aa10b27121000a09447ebacdab23bcbe4",
+  "rounds": [
+    {
+      "number": 1,
+      "reviewer": "Fresh delegated session /root/spec_review_round1 (fork_turns=none)",
+      "summary": "Found EOF counting ambiguity and editor/output clipboard scope ambiguity; both accepted and confirmed resolved by fresh Round 2 review before synthesis.",
+      "findings": [
+        {
+          "id": "F-1",
+          "severity": "blocking",
+          "summary": "EOF line counting is ambiguous across preview and output parsers.",
+          "evidence": "spec.md permits a final empty document line conditionally; web/src/live-preview.js counts editor lines while web/src/markdown.js uses markdown-it token content. Closed and unclosed one-line fences can have identical token content x plus newline.",
+          "status": "incorporated",
+          "resolution": "Defined parsed-content counting with zero for empty content, exactly one terminal empty segment removed, explicit closed/unclosed examples, counting-only newline normalization, and matching cross-surface validation."
+        },
+        {
+          "id": "F-2",
+          "severity": "minor",
+          "summary": "AC-4 conflates editor Markdown copying and rendered HTML code copying.",
+          "evidence": "AC-4 requires selected Markdown while AC-7 and web/src/app.js export/print paths use rendered HTML without Markdown fences.",
+          "status": "incorporated",
+          "resolution": "Scoped AC-4 to editor Markdown selection/editing and AC-7 to rendered HTML copying; clarified output-specific wrapping and print validation."
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "reviewer": "Fresh delegated session /root/spec_review_round2 (fork_turns=none)",
+      "summary": "Confirmed F-1/F-2 proposed resolutions address prior issues and found no new material blockers; critique converged before synthesis.",
+      "findings": []
+    }
+  ],
+  "finalReview": "Synthesized only after fresh Round 2 convergence. Compared final spec with immutable original intent, user-confirmed live-preview/HTML/print scope, both finding dispositions, and inspected parser/rendering/native/test paths. Original intent remains exact and original SHA-256 unchanged. AC-1 through AC-7 each have one concrete executor/method/evidence mapping. Replaced ambiguous EOF behavior with explicit examples; separated editor Markdown copying from rendered output copying; retained parsed nested fence boundaries, source-mode/frontmatter/inline/diagram exclusions, byte-preserving persistence, and output-specific wrapping/pagination. No unresolved product decisions or findings remain. Read-only parser probes support counting assumptions; feature automation, system clipboard, geometry/screenshots, standalone output, and native print pagination remain required implementation evidence, not checks passed by preparation. Existing repository complexity and dependency findings are unrelated to these documentation-only changes.",
+  "preparedSpecSha256": "d0b7b7820286d32f4a1ad511e22c2b817c3f950c06506d0b6855801c7c43b9a0"
+}

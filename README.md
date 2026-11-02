@@ -69,6 +69,10 @@ In the find bar, Enter and ⇧Enter go to the next and previous match, Enter in 
 
 Command-click links to open them. New documents, File → Open, Open Recent, Finder and Dock opens, workspace clicks, and Markdown files dropped on the editor all open in the current window, after the current document. The workspace list refreshes when Margin becomes the active app, or with its refresh button. The last workspace, appearance and text zoom are remembered.
 
+## Planning changes
+
+Use the repository skills `$draft-spec` and `$prepare-spec` to turn intent into a reviewed specification before implementation. See [DEVELOPMENT.md](DEVELOPMENT.md) for the planning and execution workflow.
+
 ## Implementation
 
 - `Sources/Margin.swift`: AppKit application, NSDocument lifecycle, each document's editor and its bridge to the web editor, menus, file panels, export/printing, and the restricted local-image URL handler.
