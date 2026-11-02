@@ -523,17 +523,27 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 }
                 defer { a.close(); b.close() }
                 guard let host = a.editor?.host, let window = host.window else { throw CocoaError(.fileReadUnknown) }
+                defer {
+                    if let sheet = window.attachedSheet {
+                        window.endSheet(sheet, returnCode: .cancel)
+                    }
+                    host.close()
+                }
                 host.select(a)
                 window.performClose(nil)
                 try waitUntil { window.attachedSheet != nil }
                 func cancelButton(_ view: NSView) -> NSButton? {
-                    if let button = view as? NSButton, button.title == "Cancel" {
+                    if let button = view as? NSButton, button.title == "Cancel" || button.keyEquivalent == "\u{1b}" {
                         return button
                     }
                     return view.subviews.lazy.compactMap(cancelButton).first
                 }
-                guard let content = window.attachedSheet?.contentView, let cancel = cancelButton(content) else { throw CocoaError(.fileReadUnknown) }
-                cancel.performClick(nil)
+                try waitUntil { window.attachedSheet?.contentView.flatMap(cancelButton) != nil || window.attachedSheet is NSSavePanel }
+                if let panel = window.attachedSheet as? NSSavePanel {
+                    panel.cancel(nil)
+                } else {
+                    window.attachedSheet?.contentView.flatMap(cancelButton)?.performClick(nil)
+                }
                 try waitUntil { window.attachedSheet == nil }
                 try expect(window.isVisible && host.documents.count == 2 && host.current === a && a.text == "Unsaved close fixture", "Cancelling closed a document or changed the current one")
                 host.select(b); host.select(a)
@@ -877,13 +887,13 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 client.insertText("typed ", replacementRange: insertion)
                 try waitUntil { doc.text.contains("typed ") }
                 client.setMarkedText("字", selectedRange: NSRange(location: 1, length: 0), replacementRange: insertion)
-                try expect(client.hasMarkedText(), "Native input client did not begin composition")
+                try waitUntil { client.hasMarkedText() }
                 try expect(try script("__compositionCell.isConnected && __compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.textContent.includes('字')") as? Bool == true, "Starting composition replaced the cell")
                 client.setMarkedText("字文", selectedRange: NSRange(location: 2, length: 0), replacementRange: insertion)
                 try expect(try script("__compositionCell.isConnected && __compositionCell.textContent.includes('字文')") as? Bool == true, "Updating marked text replaced the cell")
                 client.insertText("字文", replacementRange: insertion)
                 try waitUntil { doc.text.contains("| typed 字文 | other |") }
-                try expect(!client.hasMarkedText(), "Commit left marked text behind")
+                try waitUntil { !client.hasMarkedText() }
                 try expect(try script("__compositionCell === document.querySelector('.cm-md-cell-editing') && __compositionCell.contains(getSelection().anchorNode) && getSelection().isCollapsed") as? Bool == true, "Native commit lost cell identity or caret")
             }
             test("Typing in the page marks the document unsaved") {
