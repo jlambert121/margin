@@ -3,6 +3,13 @@
 /.build/
 /DerivedData/
 
+# Execution worktrees and local runtime data
+/.worktrees/
+/.execution/
+# Keep readable summaries; ignore screenshots, logs, state, reports, and copied inputs
+/docs/tasks/*/execution/*/*
+!/docs/tasks/*/execution/*/*.md
+
 # JavaScript dependencies and logs
 node_modules/
 *.log

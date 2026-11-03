@@ -5,11 +5,11 @@ import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync,
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { start } from '../tools/execution/start.mjs';
-import { assertActive, release } from '../tools/execution/artifacts.mjs';
-import { assertClean, commonDirectory, git, revision } from '../tools/execution/git.mjs';
+import { acquire, assertActive, release } from '../tools/execution/artifacts.mjs';
+import { assertClean, runtimeDirectory, git, revision } from '../tools/execution/git.mjs';
 import { execute, verify as verifyRun } from '../tools/execution/verify.mjs';
 
-const verificationLock = (run) => `${commonDirectory(run.state.source)}/desktop-test.lock`;
+const verificationLock = (run) => `${runtimeDirectory(run.state.source)}/desktop-test.lock`;
 const verify = (run, runner) => verifyRun(run, runner, verificationLock(run));
 import { recordReview, finish } from '../tools/execution/review.mjs';
 
@@ -37,7 +37,7 @@ function fixture(t) {
   cpSync('tools/planning', `${root}/tools/planning`, { recursive: true });
   cpSync('tools/execution', `${root}/tools/execution`, { recursive: true });
   writeFileSync(`${root}/source.txt`, 'initial\n');
-  writeFileSync(`${root}/.gitignore`, 'build/\n');
+  writeFileSync(`${root}/.gitignore`, 'build/\n.worktrees/\n.execution/\n');
   git(root, 'init', '-q');
   git(root, 'config', 'commit.gpgsign', 'false');
   git(root, 'config', 'user.name', 'Execution Tests');
@@ -90,13 +90,19 @@ test('gate allows task artifacts but rejects tracked, untracked, and renamed sou
   git(f.root, 'mv', 'source.txt', 'docs/tasks/example/moved.txt');
   assert.throws(() => assertClean(f.root), /source.txt/);
   assert.notEqual(f.cli('start', 'example').status, 0);
-  assert.equal(existsSync(`${commonDirectory(f.root)}/active.json`), false);
+  assert.equal(existsSync(`${runtimeDirectory(f.root)}/active.json`), false);
 });
 
 test('start snapshots uncommitted prepared inputs, isolates code, and enforces one active run', (t) => {
   const f = fixture(t);
   const run = start(f.root, 'example');
   assert.equal(readFileSync(`${run.path}/inputs/spec.md`, 'utf8'), draft);
+  assert.equal(run.state.worktree, `${f.root}/.worktrees/${run.state.id}`);
+  assert.equal(runtimeDirectory(f.root), `${f.root}/.execution`);
+  assert.equal(runtimeDirectory(run.state.worktree), runtimeDirectory(f.root));
+  assert.equal(git(f.root, 'check-ignore', `.worktrees/${run.state.id}/source.txt`).trim(), `.worktrees/${run.state.id}/source.txt`);
+  assert.equal(git(f.root, 'check-ignore', '.execution/active.json').trim(), '.execution/active.json');
+  assert.throws(() => acquire(run.state.worktree, 'another-run'), /Another execution/);
   assert.equal(readFileSync(`${run.state.worktree}/source.txt`, 'utf8'), 'initial\n');
   assert.throws(() => start(f.root, 'example'), /Another execution/);
   assert.doesNotThrow(() => assertActive(run));
@@ -106,7 +112,7 @@ test('start snapshots uncommitted prepared inputs, isolates code, and enforces o
   writeFileSync(`${f.task}/spec.md`, `${draft}\nChanged\n`);
   assert.throws(() => assertActive(run), /Planning input changed/);
   assert.equal(f.cli('stop', 'example', run.state.id, 'Inputs changed').status, 0);
-  assert.equal(existsSync(`${commonDirectory(f.root)}/active.json`), false);
+  assert.equal(existsSync(`${runtimeDirectory(f.root)}/active.json`), false);
   assert.ok(existsSync(run.state.worktree));
 });
 

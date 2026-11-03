@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { assertClean, assertInside, commonDirectory, digest, readJson, revision } from './git.mjs';
+import { assertClean, assertInside, runtimeDirectory, digest, readJson, revision } from './git.mjs';
 
 export const inputs = ['original.md', 'spec.md', 'feedback.md', 'state.json'];
 export const terminal = ['ready-for-review', 'incomplete'];
@@ -12,7 +12,7 @@ export function writeJson(path, value) {
 }
 
 export function acquire(root, path) {
-  const directory = commonDirectory(root);
+  const directory = runtimeDirectory(root);
   mkdirSync(directory, { recursive: true });
   const lock = `${directory}/active.json`;
   if (existsSync(lock)) {
@@ -23,7 +23,7 @@ export function acquire(root, path) {
 }
 
 export function release(root, path) {
-  const lock = `${commonDirectory(root)}/active.json`;
+  const lock = `${runtimeDirectory(root)}/active.json`;
   if (existsSync(lock) && readJson(lock).path === path) unlinkSync(lock);
 }
 

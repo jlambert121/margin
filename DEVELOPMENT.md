@@ -19,7 +19,7 @@ $execute-spec code-block-line-numbers
 
 Drafting and preparation are separate steps. Execution starts only after preparation succeeds, and handles one task at a time.
 
-Execution creates a separate Git working copy for the changes. It builds and tests the app, checks each acceptance criterion, and gets an independent review, with up to three review rounds. It leaves the result ready for your review; merging, pushing, and releasing are separate actions.
+Execution creates a separate Git working copy under `.worktrees/` for the changes; `.execution/` holds its lock. Both directories are ignored by Git and kept outside `build/` so cleaning builds does not delete unfinished work. It builds and tests the app, checks each acceptance criterion, and gets an independent review, with up to three review rounds. It leaves the result ready for your review; merging, pushing, and releasing are separate actions.
 
 ## When work stops
 
@@ -32,6 +32,8 @@ Desktop tests use temporary test files and separate settings. Keep a normal macO
 ## Results
 
 The specification and planning feedback are in `docs/tasks/<task>/`. Each execution attempt has its own folder under `docs/tasks/<task>/execution/`, containing a handoff, review findings, test results, and screenshots.
+
+Execution screenshots, logs, temporary files, runtime state, generated JSON reports, and copied inputs stay local and are ignored by Git. Keep the task specifications and readable Markdown summaries, including handoffs and review notes, in Git.
 
 Start with `handoff.md` for what changed, which checks passed, and any remaining limitations. The agent provides the working copy and branch for inspecting the changes.
 
@@ -85,3 +87,5 @@ Delta between the article's second loop and this implementation:
 | Feed problems back into planning | Handoff records problems and proposed workflow improvements | Independent review of the handoff and creation of follow-up planning tasks |
 
 Parallel tasks, dependency graphs, and integration branches are deliberately deferred; execution handles one task at a time.
+
+Look into token efficency - switch models when it makes sense

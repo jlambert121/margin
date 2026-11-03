@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { acquire, release, save, inputs } from './artifacts.mjs';
-import { assertClean, assertInside, commonDirectory, digest, git, readJson, revision } from './git.mjs';
+import { assertClean, assertInside, worktreeDirectory, digest, git, readJson, revision } from './git.mjs';
 
 export function start(root, slug) {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug ?? '')) throw new Error('Use a lowercase task slug with hyphens');
@@ -15,7 +15,7 @@ export function start(root, slug) {
   if (planning.status !== 'prepared') throw new Error('Task must be prepared before execution');
   const id = `${new Date().toISOString().replace(/[^0-9]/g, '')}-${randomUUID().slice(0, 8)}`;
   const path = `${task}/execution/${id}`;
-  const worktree = `${commonDirectory(root)}/worktrees/${id}`;
+  const worktree = `${worktreeDirectory(root)}/${id}`;
   const base = revision(root);
   acquire(root, path);
   const run = { path, state: { version: 1, slug, id, source: root, base, worktree, branch: `execute/${slug}/${id}`, status: 'implementing', inputs: {}, verifications: [], reviews: [] } };

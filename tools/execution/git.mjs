@@ -32,8 +32,19 @@ export function assertClean(root) {
   if (dirty.length) throw new Error(`Working tree has blocking changes; stop without stashing or committing:\n${dirty.map((path) => JSON.stringify(path)).join('\n')}`);
 }
 
-export function commonDirectory(root) {
-  return resolve(root, git(root, 'rev-parse', '--git-common-dir').trim(), 'margin-execution');
+function repositoryRoot(root) {
+  // Git lists the primary checkout first, including when called from a linked worktree.
+  const primary = git(root, 'worktree', 'list', '--porcelain', '-z').split('\0')[0];
+  if (!primary.startsWith('worktree ')) throw new Error('Cannot locate the primary checkout');
+  return realpathSync(primary.slice('worktree '.length));
+}
+
+export function runtimeDirectory(root) {
+  return resolve(repositoryRoot(root), '.execution');
+}
+
+export function worktreeDirectory(root) {
+  return resolve(repositoryRoot(root), '.worktrees');
 }
 
 export function assertInside(parent, path) {
