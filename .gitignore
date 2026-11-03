@@ -3,6 +3,10 @@
 /.build/
 /DerivedData/
 
+# Planning subprocess logs, checkpoints, and locks
+/docs/tasks/*/planning/
+/docs/tasks/*/state.json.*.tmp
+
 # Execution worktrees and local runtime data
 /.worktrees/
 /.execution/

@@ -1,26 +1,16 @@
 ---
 name: prepare-spec
-description: Critique and synthesize an existing Margin task draft into an implementation-ready specification, preserving original intent and review history.
+description: Run Margin's planning controller to critique a task draft, preserve review history, and synthesize an implementation-ready specification.
 ---
 
 # Prepare a specification
 
-Read [the planning protocol](../draft-spec/references/planning.md) for commands and state schema. Validate the named task and read all four files. Preserve `original.md` byte-for-byte and all previous feedback. Application source remains read-only.
+Read [the planning protocol](../draft-spec/references/planning.md). Run `node tools/planning/controller.mjs <task-slug>` from the repository root. The controller launches fresh read-only Codex sessions, records critique and dispositions through the history script, synthesizes the spec, and requires a final independent consistency review. Do not replace it with self-review or manually edit feedback, journal entries, or state to bypass its gates. Do not implement the application change.
 
-## Critique
+Report stage updates and final outcome. On needs-input, present the controller's question and options. Wait for the user's actual answer; write that answer to a temporary text file and continue with `node tools/planning/controller.mjs <task-slug> --decision <answer-file>`. Do not invent a decision or treat elapsed time as approval.
 
-Use a fresh reviewer session with the task artifacts, repository instructions, and access to relevant implementation and tests. Request incorrect assumptions, missing behavior, untestable criteria, and scope expansion, supported by evidence and consequences. One reviewer per round is enough. A separate session may be manual or delegated when available and authorized. If unavailable, report incomplete preparation and provide a concrete review prompt; never represent self-review as independent critique.
+On subprocess/auth/rate-limit failure, explain the error and retained attempt location; rerunning the same command retries the unfinished stage without discarding completed rounds. If three rounds cannot converge, or final consistency review fails, report incomplete preparation with the unresolved problems. Do not reset counters or rewrite the original intent to obtain a pass. A stale planning/operation.lock after abrupt termination requires confirming the old process is stopped before removing only that lock.
 
-Append full findings to `feedback.md` under numbered rounds. Mirror each finding in `state.json` using the documented schema and unique IDs. Subsequent reviewers see the original and all feedback. Keep `spec.md` unchanged during critique; record proposed resolutions in feedback. Deduplicate repeated findings and explain incorporated, rejected, and awaiting-user dispositions.
+Use `tools/planning/history.mjs` for any additional review/disposition records, following the reference schema. The script imports existing feedback as a baseline and detects later edits. Never overwrite earlier entries. The controller itself uses the same event-writing functions.
 
-Only material correctness, feasibility, scope, or validation problems block readiness. Resolve minor suggestions explicitly without expanding scope. If a disproven assumption or scope change leaves a real product choice, set status to `needs-input` and present options. Record the user's answer in feedback and the resolution. Routine technical choices need no escalation.
-
-Use at most three rounds. Stop early when a fresh reviewer reports no new blockers and confirms proposed resolutions address prior blockers. If blockers remain at the limit, set status to `incomplete`. Never equate the round limit with readiness.
-
-## Synthesis
-
-Once critique converges, synthesize `spec.md` from the original and accepted feedback. Preserve Original intent exactly. Explain changed or removed criteria in feedback. Review the synthesized spec against intent, finding dispositions, code references, and validation mappings. New blockers leave the task incomplete or needing a product decision.
-
-Record the specific consistency review and limitations in state `finalReview`. Set status to `critique` after resolving a stopped task. Run `node tools/planning/task.mjs prepare <slug>` and only report prepared if it succeeds. Later spec edits require renewed review and preparation.
-
-Return the spec link, key decisions, rounds, and limitations. Prepared means ready for implementation; structural validation does not establish correctness.
+Return the spec link, key decisions, critique count, and limitations. Only report prepared when the controller finishes successfully; prepared means ready for implementation, not implemented.

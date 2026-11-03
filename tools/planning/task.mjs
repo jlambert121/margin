@@ -1,7 +1,8 @@
 import { validateSpec } from './spec.mjs';
 import { validateRounds } from './reviews.mjs';
+import { checkHistory } from './history.mjs';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,7 +15,7 @@ function taskPath(slug) {
   return resolve(root, 'docs/tasks', slug);
 }
 
-function loadTask(slug) {
+export function loadTask(slug) {
   const path = taskPath(slug);
   const original = readFileSync(`${path}/original.md`, 'utf8');
   const spec = readFileSync(`${path}/spec.md`, 'utf8');
@@ -27,15 +28,17 @@ function loadTask(slug) {
   const parts = validateSpec(spec);
   if (parts.get('Original intent') !== originalParts.get('Original intent')) throw new Error('Spec changed the original intent');
   validateRounds(state.rounds, feedback);
+  checkHistory(path, state, feedback);
   if (state.status === 'prepared' && state.preparedSpecSha256 !== hash(spec)) throw new Error('Prepared spec changed; review and prepare it again');
-  return { path, original, spec, parts, state };
+  return { slug, path, original, spec, parts, state };
 }
 
-function checkReady(task) {
+export function checkReady(task) {
   const { state, parts } = task;
   if (!state.rounds.length) throw new Error('At least one fresh critique round is required');
   if (state.rounds.some((round) => round.findings.some((finding) => ['open', 'awaiting-user'].includes(finding.status)))) throw new Error('Resolve all findings before preparation');
   if (parts.get('Open decisions').toLowerCase() !== 'none') throw new Error('Resolve Open decisions and write None');
+  if (state.controllerManaged && (!state.convergenceRound || !state.finalReviewPassed || state.finalReviewSpecSha256 !== hash(task.spec))) throw new Error('Controller convergence and final review of this exact spec are required');
   if (!state.finalReview?.trim()) throw new Error('Record a final consistency review in finalReview');
   if (state.status === 'needs-input' || state.status === 'incomplete') throw new Error('Resolve the stopped task and set status to critique before preparation');
 }
@@ -84,9 +87,6 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

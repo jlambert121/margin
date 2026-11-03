@@ -17,7 +17,9 @@ $prepare-spec code-block-line-numbers
 $execute-spec code-block-line-numbers
 ```
 
-Drafting and preparation are separate steps. Execution starts only after preparation succeeds, and handles one task at a time.
+Drafting and preparation are separate steps. Preparation now runs fresh critique sessions, combines the findings into a specification, and gets a final consistency review automatically. It requires the Codex CLI to be installed and signed in; model calls use your configured Codex access.
+
+If preparation asks for a decision, answer it in the conversation and ask the agent to continue. If a model call fails, ask it to retry; completed rounds are kept. Execution starts only after preparation succeeds, and handles one task at a time.
 
 Execution creates a separate Git working copy under `.worktrees/` for the changes; `.execution/` holds its lock. Both directories are ignored by Git and kept outside `build/` so cleaning builds does not delete unfinished work. It builds and tests the app, checks each acceptance criterion, and gets an independent review, with up to three review rounds. It leaves the result ready for your review; merging, pushing, and releasing are separate actions.
 
@@ -62,13 +64,7 @@ Delta between the article's first loop and this implementation:
 
 | Capability | Current implementation | Missing |
 | --- | --- | --- |
-| Start and repeat critique | `prepare-spec` tells the agent how | A controller that launches reviewers, collects results, and advances rounds |
-| Preserve review history | Append-only instructions; original hash checking | Scripted append operations that prevent accidental history replacement |
-| Resolve findings and escalate | Skill instructions and structured statuses | Commands to record dispositions and pause/resume around user decisions |
-| Enforce convergence | Checks require reviews and resolved findings | Explicit evidence that a final fresh review confirmed convergence; currently this is prose |
-| Synthesize the final spec | Agent follows the skill | Controller-managed synthesis stage and saved intermediate results |
-| Resume interrupted preparation | Files retain the work | Automatic recovery from the last completed stage |
-| Report progress | `status` shows status, rounds, unresolved findings | A stage-by-stage run summary showing what ran and what happens next |
+| Resume interrupted preparation | Saved stages, agent responses, and replayable review history | Automatic stale-lock recovery after an abruptly killed process |
 
 The article also includes GitHub issue creation/labels, batch preparation, and parallel reviewers from multiple vendors. These are deliberately deferred.
 

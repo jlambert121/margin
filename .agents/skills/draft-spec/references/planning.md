@@ -1,72 +1,86 @@
 # Planning protocol for agents
 
-
 Agent reference for draft-spec and prepare-spec. Human instructions are in [DEVELOPMENT.md](../../../../DEVELOPMENT.md).
 
-## Task initialization
+## Draft initialization
 
 ```sh
 node tools/planning/task.mjs template > /private/tmp/margin-draft.md
-# Complete the draft, then:
-node tools/planning/task.mjs init table-navigation --from /private/tmp/margin-draft.md
-node tools/planning/task.mjs validate table-navigation
-node tools/planning/task.mjs status table-navigation
+# Complete the draft before initialization.
+node tools/planning/task.mjs init <task> --from /private/tmp/margin-draft.md
+node tools/planning/task.mjs validate <task>
+node tools/planning/task.mjs status <task>
 ```
 
-Replace the example slug with the requested task slug. Run commands from any directory. `--from` is relative to the caller's current directory. Initialization refuses to overwrite an existing task.
+Initialization refuses to overwrite a task. The four task files remain original.md (immutable proposal), spec.md (working/final specification), feedback.md (append-only review projection), and state.json (status and structured round projection). Use the template's level-two headings. Original intent captures the request in at most three sentences. Criteria use unique `- AC-1: observable behavior` lines, and Validation maps each ID exactly once to an executor, concrete steps, and expected evidence. Cite relevant source paths and checked assumptions. Record unresolved product choices with options; Open decisions is `None` when resolved.
 
-Each task lives in `docs/tasks/<slug>/`:
+Validation choices include npm test (syntax, loop tools, workspace, default native, document, WebKit), npm run test:native (additional --ui path), and npm run build. Desktop checks require a normal macOS desktop session. Check actual existing coverage before claiming it validates new behavior; screenshots alone do not prove save/undo behavior. These are future implementation checks, not checks passed by preparing a spec.
 
-- `original.md`: the initial proposal, including the user's intent; preserve it byte-for-byte.
-- `spec.md`: the implementation specification synthesized after critique.
-- `feedback.md`: append-only findings, proposed resolutions, and user decisions.
-- `state.json`: status and structured review metadata, maintained by the preparing agent.
+## Controller
 
-Keep these artifacts under version control. The original hash detects accidental edits; Git history preserves the audit trail. This is not tamper-proof storage. The script does not enforce append-only feedback or assess whether a reviewer is independent.
+```sh
+node tools/planning/controller.mjs <task>
+node tools/planning/controller.mjs <task> --decision /path/to/user-answer.txt
+```
 
-## Specification format
+Each critique is a fresh `codex exec --sandbox read-only --ephemeral` session with structured output, the original, working spec, all feedback, and access to repository source/tests. It inherits the configured model and authentication; it does not inherit conversation history. Local subprocess commands require no API key setup beyond the user's existing CLI access. The controller never disables the sandbox or ignores project rules. Child approval policy is never; an unavailable required tool must be reported rather than bypassed.
 
-Use the template's level-two headings. Original intent captures the request in at most three sentences; preserve that section in the final spec. Criteria use `- AC-1: observable behavior` lines. Validation uses the same IDs exactly once, with a method, executor, concrete steps, and expected evidence. Code references should identify paths and checked assumptions rather than freezing incidental line numbers.
+At most three critique rounds run. A critique returns summary, converged, decision, new findings, and explicit dispositions of earlier findings. Findings use globally unique F-N IDs, severity blocking/minor, summary, and evidence/consequences. The script records new findings as open; dispositions are incorporated, rejected, or awaiting-user and require reasons. Incorporated during critique means an accepted proposed change for later synthesis. Repeated findings should reference existing IDs through dispositions rather than invent duplicates.
 
-Margin validation can include `npm test` (syntax, workspace, default native, document, and WebKit checks), `npm run test:native` (the native runner's additional `--ui` path), and `npm run build`. New behavior may require new tests. Desktop tests require a macOS desktop session. A screenshot proves appearance, not save/undo correctness. Specify manual checks when automation cannot establish a criterion; never describe unavailable validation as passed.
+Original.md and spec.md remain unchanged during critique. Genuine scope/assumption decisions pause with needs-input and concrete options. Only an explicit answer supplied through --decision resumes that task; the answer is recorded in history. No new round or model call runs while waiting. If round three still cannot converge, preparation stops incomplete; do not reset its counter. A decision supplied after the third round remains recorded but does not grant extra rounds.
 
-## Review state
+After a fresh critique confirms convergence and all findings are resolved, a separate synthesis session returns the complete spec as data. The controller validates its headings, intent, criterion mapping, and resolved decisions before writing spec.md. It records the exact proposed spec and rationale in history. A final fresh session checks consistency against original intent, feedback/dispositions, code assumptions, and validation. Only a passing final review with no findings can produce prepared. Direct task prepare also enforces these controller-managed readiness fields and the final spec hash.
 
-Initialization writes version, status, originalSha256, rounds, and finalReview. Keep the generated hash. Allowed statuses are `draft`, `critique`, `needs-input`, `incomplete`, and `prepared`. Here is a round entry for the `rounds` array:
+The controller does not start execution. Previously prepared legacy tasks remain readable and are not re-prepared automatically.
+
+## Durable history
+
+history/baseline.json captures the existing feedback and rounds on first use, preserving legacy manual work. Subsequent numbered JSON files are immutable event records linked by hashes. state.json stores the baseline/head hashes. feedback.md and rounds in state.json are derived views. Hash checks detect accidental event edits, deletions, reordered sequences, and replaced feedback; this is not tamper-proof storage against someone deliberately rewriting all files.
+
+The writer creates a new event with exclusive creation and appends feedback without replacing earlier text. Stable event keys make replay idempotent; reusing a key with different content fails. Recovery accepts only an earlier valid projection and appends/restores the missing derived updates. Arbitrary edits fail instead of being silently overwritten. Preserve the journal with feedback/state in Git; subprocess logs and controller checkpoints under planning/ are ignored.
+
+For an additional manually obtained review or disposition, write an event file and run:
+
+```sh
+node tools/planning/history.mjs append <task> /path/to/event.json
+node tools/planning/history.mjs sync <task>
+```
+
+Round event example:
 
 ```json
 {
-  "number": 1,
-  "reviewer": "fresh session; identify session or manual reviewer",
-  "summary": "Checked the proposal against document save behavior.",
-  "findings": [
-    {
-      "id": "F-1",
-      "severity": "blocking",
-      "summary": "The expected behavior for unsaved edits is unspecified.",
-      "evidence": "Describe the relevant source path, behavior, and consequence.",
-      "status": "incorporated",
-      "resolution": "Record the chosen behavior and resulting criterion here."
-    }
-  ]
+  "kind": "round",
+  "key": "manual-round-1",
+  "data": {
+    "number": 1,
+    "reviewer": "fresh session identity",
+    "summary": "What was inspected and found.",
+    "findings": [
+      {"id":"F-1","severity":"blocking","summary":"Ambiguous behavior","evidence":"Relevant source and consequence","status":"open"}
+    ]
+  }
 }
 ```
 
-Finding severity is `blocking` or `minor`; status is `open`, `incorporated`, `rejected`, or `awaiting-user`. Resolved findings require a resolution. IDs are unique across rounds. A clean round has an empty findings array. Append full review prose under an exact `## Round 1` heading in feedback.md, including finding IDs. Log subsequent dispositions underneath without deleting the original review.
+Resolution event example:
 
-A fresh reviewer receives the original, existing feedback, state, repository instructions, and access to relevant source and tests. It should check assumptions, missing behavior, validation gaps, and scope drift; every finding needs evidence and consequences. Later rounds should check proposed resolutions and report genuinely new problems rather than repeat resolved suggestions. The controller is currently the agent or human; no subprocess is launched by the script.
-
-Use at most three rounds. Keep the original proposal and working spec unchanged during critique. Resolve findings in the feedback, then synthesize spec.md once critique converges. Escalate only real product choices. If blockers remain at the limit, retain `incomplete`; do not reset the round count to hide failure. Further work after a limit requires an explicit decision to revise the task/process, preserving its history.
-
-## Readiness
-
-After synthesis, review the final spec against intent, accepted/rejected feedback, code assumptions, and validation. Record a specific summary in `finalReview`, resolve every finding, write `None` in Open decisions, and run:
-
-```sh
-node tools/planning/task.mjs prepare table-navigation
+```json
+{
+  "kind": "resolution",
+  "key": "resolve-f-1",
+  "data": [{"id":"F-1","status":"incorporated","resolution":"Accepted proposed correction and its criterion."}]
+}
 ```
 
-Preparation requires at least one critique round and records the exact spec hash. An edited prepared spec fails validation. To revise it, set status to `critique`, record renewed final review, and prepare again. `validate` checks structural integrity at every stage; passing validation on a draft does not mean ready. `status` reports unresolved findings. Commands return nonzero on malformed artifacts or invalid readiness.
+The controller also records decision, synthesis, and final-review events. Round events retain raw findings and dispositions while their state projection reflects current statuses. Do not use manual event insertion to make an unreviewed spec appear converged. Use validate/status to inspect integrity; sync repairs an interrupted derived update without deleting event history.
 
-These checks cannot establish whether criteria are sensible, evidence is true, resolutions are adequate, or a session was actually fresh. Those judgments belong to the skills and reviewer. Prepared is a handoff to a later implementation loop, not authorization to implement or ship.
+## Failure and resume
 
+planning/controller.json records the next stage and any returned response pending application. Attempts under planning/attempts/ retain prompts, output schema, JSONL events, stderr, and structured responses. Each subprocess has a fifteen-minute timeout; timeouts kill its process group. No automatic retry storm: failed calls stop and the same command retries the unfinished stage when invoked again. Previously completed rounds and valid pending responses are reused.
+
+One planning/operation.lock serializes changes to a task. If abruptly terminated, confirm the process is no longer running before removing only that stale lock. Automatic stale-lock cleanup and automatic recovery of an interrupted agent process are not implemented. State projection replay and successful-response replay are implemented.
+
+Task-file changes during an agent call invalidate its response. Manual changes to the working spec between stages stop the controller for inspection. Application source is read-only to the child agents. A failed final consistency review leaves the task incomplete with its findings recorded; resolve the planning problem explicitly rather than silently running unbounded revisions.
+
+The scripts enforce recorded integrity, bounds, and shape. They cannot prove reviewer evidence is true or that acceptance criteria capture every product expectation.
