@@ -44,6 +44,10 @@ final class MarkdownDocument: NSDocument {
         fileURL?.lastPathComponent ?? recoveredName ?? "Untitled.md"
     }
 
+    var isEmptyPlaceholder: Bool {
+        fileURL == nil && recoveredName == nil && recoveredOriginalURL == nil && !isDocumentEdited && !uncountedEdit && (text.isEmpty || isWelcome)
+    }
+
     override class var autosavesInPlace: Bool {
         true
     }

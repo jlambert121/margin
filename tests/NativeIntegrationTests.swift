@@ -393,6 +393,26 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 RunLoop.current.run(until: Date().addingTimeInterval(1))
                 try expect(closed.allSatisfy { $0.document == nil && $0.host == nil && !$0.ready }, "A closed document's editor is still connected")
             }
+            test("Opening a file replaces only an unedited untitled placeholder") {
+                defer { for doc in controller.documents {
+                    doc.close()
+                } }
+                let blank = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                blank.recoveryStore = recoveryStore; controller.addDocument(blank); blank.makeWindowControllers(); blank.showWindows()
+                guard let host = blank.editor?.host else { throw CocoaError(.fileReadUnknown) }
+                delegate.open([first], in: host)
+                try waitUntil { !controller.isOpening }
+                try expect(host.documents.count == 1 && host.current?.fileURL == first, "Opening a file left the blank placeholder open")
+                try expect(!controller.documents.contains { $0 === blank }, "The placeholder document was not closed")
+
+                let draft = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
+                draft.recoveryStore = recoveryStore; controller.addDocument(draft); draft.makeWindowControllers(); draft.showWindows()
+                host.documents.first { $0 !== draft }?.close()
+                draft.edited("Keep this draft")
+                delegate.open([second], in: host)
+                try waitUntil { !controller.isOpening }
+                try expect(host.documents.contains { $0 === draft } && draft.text == "Keep this draft", "Opening a file discarded an edited draft")
+            }
             test("Documents join the window after the current one, accept drops, reorder, and switch with ⌘⇧[ and ⌘⇧]") {
                 let opened = { (url: URL) in controller.documents.first { $0.fileURL?.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() } as? MarkdownDocument }
                 let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
@@ -654,7 +674,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
                 try expect(!sidebar.visibleTreeRows.contains("  Deep note.md") && sidebar.state.toggledFolders.contains { $0.hasSuffix("/Nested") }, "Collapsing a folder was not remembered")
                 sidebar.activateFile(row: sidebar.rowIndex(named: "Another.markdown")!)
                 try waitUntil { host.current?.fileURL?.resolvingSymlinksInPath() == second.resolvingSymlinksInPath() }
-                try expect(!sidebar.visibleTreeRows.contains("  Deep note.md") && sidebar.openFileNames.count == 2 && sidebar.currentOpenFileName == "Another.markdown", "Opening a workspace file changed the tree or Open Files")
+                try expect(!sidebar.visibleTreeRows.contains("  Deep note.md") && sidebar.openFileNames.count == 1 && sidebar.currentOpenFileName == "Another.markdown", "Opening a workspace file changed the tree or Open Files")
 
                 // Refreshing picks up files added since the last scan.
                 let added = root.appendingPathComponent("Added later.md")
@@ -687,6 +707,7 @@ final class FakeDrop: NSObject, NSDraggingInfo {
             test("Quick open lists the window's documents and workspace files, opens a file into the window, and switches to an open one") {
                 let a = try controller.makeUntitledDocument(ofType: markdownType) as! MarkdownDocument
                 a.recoveryStore = recoveryStore; controller.addDocument(a); a.makeWindowControllers(); a.showWindows()
+                a.edited("Keep this draft")
                 defer { for doc in controller.documents {
                     doc.close()
                 } }

@@ -82,6 +82,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     /// New documents go after the current one; a document in another window moves here.
     func add(_ doc: MarkdownDocument, at index: Int? = nil) {
+        let placeholder = index == nil && doc.fileURL != nil && documents.count == 1 && documents[0].isEmptyPlaceholder ? documents[0] : nil
         if let other = doc.editor?.host, other !== self {
             other.remove(doc)
         }
@@ -103,6 +104,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             let position = index ?? current.flatMap { current in documents.firstIndex { $0 === current } }.map { $0 + 1 } ?? documents.count
             documents.insert(doc, at: min(position, documents.count))
         }
+        placeholder?.close()
         if current == nil {
             select(doc)
         } else {
