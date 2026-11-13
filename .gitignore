@@ -38,3 +38,9 @@ xcuserdata/
 *.pem
 *.mobileprovision
 *.provisionprofile
+
+# Qlty links to its per-machine cache
+/.qlty/logs
+/.qlty/out
+/.qlty/plugin_cachedir
+/.qlty/results
