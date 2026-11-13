@@ -3,7 +3,7 @@
   'use strict';
   const $ = (selector) => document.querySelector(selector);
 
-  const { EditorState, Compartment, EditorView, keymap, placeholder, drawSelection, defaultKeymap, indentWithTab, syntaxHighlighting, closeBrackets, closeBracketsKeymap } = MarginEditor;
+  const { EditorState, Compartment, EditorView, keymap, placeholder, drawSelection, defaultKeymap, indentWithTab, syntaxHighlighting, closeBrackets, closeBracketsKeymap, search } = MarginEditor;
   const session = MarginDocumentSession({ getView: () => view, refresh: () => output.refresh(), setTextZoom: zoom => controls.setTextZoom(zoom), setTitlebar: value => controls.setTitlebar(value), toast: message => controls.toast(message) });
   const { native, post, welcome, fromApp, changed, loadDocument, updateMetadata, setDiskText, keepMine, snapshot } = session;
   const { markdownSupport, markdownBrackets, codeHighlighter } = MarginEditorSyntax({});
@@ -23,6 +23,7 @@
       EditorView.contentAttributes.of({ spellcheck: 'true', 'aria-label': 'Markdown document' }),
       placeholder('Begin anywhere…'),
       preview.of(MarginLivePreview.extension),
+      search({ scrollToMatch: range => EditorView.scrollIntoView(range, { y: 'center' }) }),
       keymap.of([...closeBracketsKeymap, indentWithTab, ...defaultKeymap]),
       EditorView.updateListener.of(update => {
         if (update.docChanged && !update.transactions.some(tr => tr.annotation(fromApp))) changed(update.state.doc.toString());

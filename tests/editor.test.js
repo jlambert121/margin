@@ -90,6 +90,8 @@
     blur(); await tick();
     assert(!app.getHTML().includes('My note') && app.getHTML().includes('Real heading'), 'Front matter rendered in the output');
     assert(document.querySelector('#word-count').textContent === '4 words', 'Front matter counted as words: ' + document.querySelector('#word-count').textContent);
+    app.load({ name: 'Words.md', text: 'AT&T and rock&roll in **one**word\n' }); await tick();
+    assert(document.querySelector('#word-count').textContent === '5 words', 'Escaped characters or markup split words: ' + document.querySelector('#word-count').textContent);
     app.load({ name: 'Rule.md', text: '---\nNot front matter, a rule.\n' }); blur(); await tick();
     assert(!document.querySelector('.cm-md-frontmatter') && document.querySelector('.cm-md-hr'), 'A leading rule became front matter');
   });

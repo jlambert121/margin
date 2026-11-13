@@ -7,6 +7,8 @@ export { defaultKeymap, indentWithTab } from '@codemirror/commands';
 export { syntaxTree, ensureSyntaxTree, syntaxHighlighting, languageDataProp } from '@codemirror/language';
 export { tags, tagHighlighter } from '@lezer/highlight';
 export { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+// Find and replace runs through CodeMirror's search; the find bar is the app's own.
+export { search, SearchQuery, setSearchQuery, findNext, findPrevious, replaceNext, replaceAll } from '@codemirror/search';
 export { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 // YAML front matter is parsed inside the Markdown tree.
 export { yamlLanguage } from '@codemirror/lang-yaml';

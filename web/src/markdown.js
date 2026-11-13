@@ -1,4 +1,4 @@
-/* Markdown to sanitized HTML for export, printing, statistics, and table previews,
+/* Markdown to sanitized HTML for export, printing, and table previews, to plain text for statistics,
    Mermaid diagrams to sanitized SVG, and pasted HTML to Markdown. */
 (() => {
   'use strict';
@@ -56,6 +56,14 @@
   // Statistics use the fragment renderer, so diagram labels are not counted as words.
   const documentRenderer = renderer(true).use(mermaidFences);
   const fragmentRenderer = renderer(false);
+  // Readable text for statistics: inline text and code, not markup, URLs, or image descriptions.
+  function plainText(text) {
+    const inline = child => child.type === 'text' || child.type === 'code_inline' ? child.content : /break$/.test(child.type) ? ' ' : '';
+    return fragmentRenderer.parse(withoutFrontmatter(text), {}).map(token => {
+      if (token.type === 'fence' || token.type === 'code_block') return token.content;
+      return token.type === 'inline' ? token.children.map(inline).join('') : '';
+    }).join(' ');
+  }
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-', emDelimiter: '*', hr: '---' });
   turndown.use(turndownGfm);
   turndown.remove(['script', 'style', 'noscript', 'template', 'title']);
@@ -98,9 +106,9 @@
     fromHTML,
     frontmatter,
     isMermaid,
+    plainText,
     renderDiagram,
     renderDocument: text => DOMPurify.sanitize(documentRenderer.render(withoutFrontmatter(text))),
-    renderFragment: text => DOMPurify.sanitize(fragmentRenderer.render(withoutFrontmatter(text))),
     renderInline: text => DOMPurify.sanitize(fragmentRenderer.renderInline(text)),
   };
 })();

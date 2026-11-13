@@ -20,8 +20,7 @@
     refresh = () => {
       clearTimeout(this.refreshTimer);
       this.refreshTimer = setTimeout(() => {
-        const plain = MarginMarkdown.renderFragment(this.getText()).replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ');
-        const words = plain.trim().split(/\s+/u).filter(Boolean).length;
+        const words = MarginMarkdown.plainText(this.getText()).trim().split(/\s+/u).filter(Boolean).length;
         $('#word-count').textContent = `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'}`;
         $('#word-count').title = `${this.getText().length.toLocaleString()} characters · ${this.getText().split('\n').length.toLocaleString()} lines`;
         $('#reading-time').textContent = `${Math.max(1, Math.ceil(words / 225))} min read`;

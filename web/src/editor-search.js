@@ -1,17 +1,16 @@
-/* editor search: one instance owns this feature's state. */
+/* editor search: the app's find bar drives CodeMirror's search query and commands. */
 (() => {
   'use strict';
   const $ = selector => document.querySelector(selector);
-  const { EditorView } = MarginEditor;
+  const { EditorView, SearchQuery, setSearchQuery, findNext, findPrevious, replaceNext, replaceAll: replaceAllMatches } = MarginEditor;
   class EditorSearch {
     constructor({ view, revealPosition }) {
       this.view = view;
       this.revealPosition = revealPosition;
-      this.activeMatch = -1;
       this.useRegex = () => $('#find-regex').getAttribute('aria-pressed') === 'true';
-      $('#find-input').oninput = () => { this.activeMatch = -1; this.find(); };
+      $('#find-input').oninput = this.findFirst;
       $('#find-input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); this.find(event.shiftKey ? -1 : 1); } };
-      $('#find-regex').onclick = () => { $('#find-regex').setAttribute('aria-pressed', String(!this.useRegex())); this.activeMatch = -1; this.find(); $('#find-input').focus(); };
+      $('#find-regex').onclick = () => { $('#find-regex').setAttribute('aria-pressed', String(!this.useRegex())); this.findFirst(); $('#find-input').focus(); };
       $('#replace-input').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); this.replaceOne(); } };
       $('#replace-one').onclick = this.replaceOne;
       $('#replace-all').onclick = this.replaceAll;
@@ -23,64 +22,52 @@
       $('#find-close').onclick = () => { $('#find-bar').hidden = true; this.view.focus(); };
     }
 
-    findPattern = () => {
-      const query = $('#find-input').value;
-      if (!query) return null;
-      try { return new RegExp(this.useRegex() ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gimu'); } catch { return undefined; }
+    // Literal, so a typed \n or \t stays as typed rather than becoming a newline or tab.
+    query = () => {
+      const query = new SearchQuery({ search: $('#find-input').value, replace: $('#replace-input').value, regexp: this.useRegex(), literal: true });
+      this.view.dispatch({ effects: setSearchQuery.of(query) });
+      return query;
     };
 
-    findMatches = (pattern) => {
-      const matches = [];
-      for (const match of this.view.state.doc.toString().matchAll(pattern)) if (match[0]) matches.push({ from: match.index, to: match.index + match[0].length, match });
-      return matches;
+    matches = query => [...query.getCursor(this.view.state)];
+
+    report = (query) => {
+      if (!query.valid) { $('#find-result').textContent = query.search ? 'Invalid pattern' : ''; return; }
+      const { from, to } = this.view.state.selection.main;
+      const matches = this.matches(query);
+      const index = matches.findIndex(match => match.from === from && match.to === to);
+      $('#find-result').textContent = !matches.length ? 'No matches' : index < 0 ? `${matches.length.toLocaleString()} matches` : `${index + 1} of ${matches.length}`;
     };
 
-    find = (direction = 1, after = null) => {
-      const pattern = this.findPattern();
-      if (!pattern) { $('#find-result').textContent = pattern === null ? '' : 'Invalid pattern'; return; }
-      const matches = this.findMatches(pattern);
-      if (!matches.length) { $('#find-result').textContent = 'No matches'; return; }
-      if (after === null) this.activeMatch = (this.activeMatch + direction + matches.length) % matches.length;
-      else this.activeMatch = Math.max(0, matches.findIndex(match => match.from >= after));
-      const { from, to } = matches[this.activeMatch];
-      this.view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) });
-      $('#find-result').textContent = `${this.activeMatch + 1} of ${matches.length}`;
+    // A changed query starts again from the top of the document.
+    findFirst = () => {
+      const query = this.query();
+      const first = query.valid ? query.getCursor(this.view.state).next() : { done: true };
+      if (!first.done) {
+        const { from, to } = first.value;
+        this.view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) });
+      }
+      this.report(query);
     };
 
-    replacementFor = (text, { match }) => {
-      const replacement = $('#replace-input').value;
-      if (!this.useRegex()) return replacement;
-      return replacement.replace(/\$(?:([$&`'])|(\d\d?)|<([^>]*)>)/g, (token, symbol, digits, name) => {
-        if (symbol === '$') return '$';
-        if (symbol === '&') return match[0];
-        if (symbol === '`') return text.slice(0, match.index);
-        if (symbol === "'") return text.slice(match.index + match[0].length);
-        if (name !== undefined) return match.groups ? match.groups[name] ?? '' : token;
-        if (digits.length === 2 && +digits > 0 && +digits < match.length) return match[+digits] ?? '';
-        return +digits[0] > 0 && +digits[0] < match.length ? (match[+digits[0]] ?? '') + digits.slice(1) : token;
-      });
+    find = (direction = 1) => {
+      const query = this.query();
+      if (query.valid) (direction < 0 ? findPrevious : findNext)(this.view);
+      this.report(query);
     };
 
     replaceOne = () => {
-      const pattern = this.findPattern();
-      if (!pattern) return;
-      const { from, to } = this.view.state.selection.main;
-      const current = this.findMatches(pattern).find(match => match.from === from && match.to === to);
-      if (!current) { this.find(1, from); return; }
-      const insert = this.replacementFor(this.view.state.doc.toString(), current);
-      this.view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input.replace' });
-      this.find(1, from + insert.length);
+      const query = this.query();
+      if (!query.valid) return;
+      replaceNext(this.view);
+      this.report(query);
     };
 
     replaceAll = () => {
-      const pattern = this.findPattern();
-      if (!pattern) return;
-      const text = this.view.state.doc.toString();
-      const matches = this.findMatches(pattern);
-      if (!matches.length) return;
-      this.view.dispatch({ changes: matches.map(match => ({ from: match.from, to: match.to, insert: this.replacementFor(text, match) })), userEvent: 'input.replace.all' });
-      this.activeMatch = -1;
-      $('#find-result').textContent = `Replaced ${matches.length.toLocaleString()}`;
+      const query = this.query();
+      if (!query.valid) return;
+      const count = this.matches(query).length;
+      if (replaceAllMatches(this.view)) $('#find-result').textContent = `Replaced ${count.toLocaleString()}`;
     };
 
     showFind = (replacing = false) => {
