@@ -33,6 +33,7 @@ final class DocumentEditor: NSObject, WKScriptMessageHandler, WKNavigationDelega
     private var failureText: NSTextView?
     private var failureView: NSView?
     private var sentTitlebarInset: CGFloat?
+    private var contextMenuCode: String?
     private let logger = Logger(subsystem: "com.infiniteviewtech.margin", category: "Editor")
     var isShowingFailure: Bool {
         failureView != nil
@@ -310,7 +311,12 @@ final class DocumentEditor: NSObject, WKScriptMessageHandler, WKNavigationDelega
         case "toggleSidebar": host?.toggleSidebar()
         case "previousFile": host?.selectAdjacent(-1)
         case "nextFile": host?.selectAdjacent(1)
-        case "contextMenu": webView.documentMenuRequested = true
+        case "contextMenu":
+            webView.documentMenuRequested = true
+            contextMenuCode = body["code"] as? String
+        case "copyText": if let text = body["text"] as? String {
+                copyToPasteboard(text)
+            }
         case "outline":
             let headings: [HeadingEntry] = (body["headings"] as? [[String: Any]] ?? []).compactMap { item -> HeadingEntry? in
                 guard let level = item["level"] as? Int, let text = item["text"] as? String, let pos = item["pos"] as? Int else { return nil }
@@ -351,11 +357,26 @@ final class DocumentEditor: NSObject, WKScriptMessageHandler, WKNavigationDelega
             return parent
         }
         let headings = (1 ... 6).map { format("Heading \($0)", "h\($0)") }
-        return [
+        let copyCode = contextMenuCode.map { code -> [NSMenuItem] in
+            let item = NSMenuItem(title: "Copy Code Block", action: #selector(copyCodeFromMenu(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = code
+            return [item, .separator()]
+        } ?? []
+        return copyCode + [
             format("Insert Table", "table"), format("Insert Link…", "link"), format("Insert Image…", "image"), format("Insert Code Block", "codeBlock"),
             submenu("Paragraph", [format("Body", "paragraph")] + headings + [nil, format("Bullet List", "bulletList"), format("Numbered List", "orderedList"), format("Task List", "taskList"), format("Quote", "blockquote")]),
             submenu("Format", [format("Bold", "bold"), format("Italic", "italic"), format("Strikethrough", "strike"), format("Inline Code", "code")]),
         ]
+    }
+
+    @objc func copyCodeFromMenu(_ sender: NSMenuItem) {
+        guard let code = sender.representedObject as? String else { return }
+        copyToPasteboard(code)
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     @objc func formatFromMenu(_ sender: NSMenuItem) {

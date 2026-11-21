@@ -26,9 +26,27 @@
     toDOM() { const rule = document.createElement('span'); rule.className = 'cm-md-hr'; return rule; }
   }
   class FenceLabelWidget extends WidgetType {
-    constructor(label) { super(); this.label = label; }
-    eq(other) { return other.label === this.label; }
-    toDOM() { const label = document.createElement('span'); label.className = 'cm-md-fence-label'; label.textContent = this.label; return label; }
+    constructor(label, copyable = false) { super(); this.label = label; this.copyable = copyable; }
+    eq(other) { return other.label === this.label && other.copyable === this.copyable; }
+    toDOM(view) {
+      const label = document.createElement('span'); label.className = 'cm-md-fence-label'; label.textContent = this.label;
+      if (this.copyable) label.append(copyButton(view));
+      return label;
+    }
+  }
+  function copyButton(view) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'cm-md-copy-code'; button.textContent = 'Copy';
+    button.addEventListener('mousedown', event => event.preventDefault());
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      const text = MarginCodeCopy.textAt(view.state, view.posAtDOM(button));
+      if (text === null) return;
+      MarginCodeCopy.copy(text);
+      button.textContent = 'Copied';
+      setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+    });
+    return button;
   }
   // A rendered Mermaid diagram. Clicking it places the cursor in the fence, which shows its source.
   class DiagramWidget extends WidgetType {

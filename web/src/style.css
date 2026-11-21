@@ -398,6 +398,26 @@ body.sidebar-open #toggle-sidebar,body.sidebar-open .toolbar-left .divider {
   color:var(--muted)
 }
 
+.cm-md-copy-code {
+  position:absolute;
+  top:8px;
+  right:12px;
+  padding:2px 6px;
+  border:1px solid transparent;
+  border-radius:4px;
+  background:none;
+  font:inherit;
+  letter-spacing:inherit;
+  text-transform:inherit;
+  color:inherit;
+  cursor:pointer
+}
+
+.cm-md-copy-code:hover {
+  border-color:var(--line);
+  color:var(--text)
+}
+
 /* Diagram colors follow the theme; Pele's SVG reads them from these variables. */
 .pele {
   --pele-bg:var(--paper);

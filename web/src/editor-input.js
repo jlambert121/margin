@@ -43,6 +43,7 @@
 
     contextmenu = (event, view) => {
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      const code = pos === null ? null : MarginCodeCopy.textAt(view.state, pos);
       if (pos !== null) {
         const line = view.state.doc.lineAt(pos);
         const around = line.text.slice(Math.max(0, pos - line.from - 1), pos - line.from + 1);
@@ -50,7 +51,7 @@
         if (!inSelection && !/\S/.test(around)) view.dispatch({ selection: { anchor: pos } });
       }
       // The app adds the document's commands to the menu that follows.
-      this.post('contextMenu');
+      this.post('contextMenu', code === null ? {} : { code });
       return false;
     };
 

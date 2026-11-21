@@ -53,7 +53,7 @@
     lineClass('cm-md-codeblock-first', first.from);
     lineClass('cm-md-codeblock-last', last.from);
     if (!touches(from, to)) {
-      add(Decoration.replace(label ? { widget: new FenceLabelWidget(label) } : {}), first.from, first.to);
+      add(Decoration.replace(label ? { widget: new FenceLabelWidget(label, true) } : {}), first.from, first.to);
       if (closed) { hide(last.from, last.to); lineClass('cm-md-fence-hidden', last.from); }
       if (!label) lineClass('cm-md-fence-hidden', first.from);
     }

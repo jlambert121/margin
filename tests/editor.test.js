@@ -539,6 +539,45 @@
     app.preparePrint();
     assert(document.querySelectorAll('#print-view figure.mermaid-diagram svg.pele').length === 2, 'Print view lacks diagrams');
   });
+  await test('Code block text excludes fences, info strings, and container markers', async () => {
+    const cases = [
+      ['```js\nlet a = 1\n  b()\n```\n', 'let a = 1\n  b()'],
+      ['~~~\n\nx\n\n~~~\n', '\nx\n'],
+      ['> ```js\n> a\n>\n>   b\n> ```\n', 'a\n\n  b'],
+      ['- item\n\n  ```js\n  a\n\n    b\n  ```\n', 'a\n\n  b'],
+      ['```\n```\n', ''],
+      ['```js\nx\n', 'x\n'],
+    ];
+    for (const [text, expected] of cases) {
+      app.load({ text, name: 'Copy.md' }); await tick();
+      const pos = text.indexOf('`') >= 0 ? text.indexOf('`') : text.indexOf('~');
+      const actual = MarginCodeCopy.textAt(view.state, pos);
+      assert(actual === expected, `${JSON.stringify(text)} copied ${JSON.stringify(actual)}`);
+    }
+    app.load({ text: '---\ntitle: x\n---\n\nPlain `code`\n\n    indented\n', name: 'Copy.md' }); await tick();
+    for (const pos of [5, 25, 36]) assert(MarginCodeCopy.textAt(view.state, pos) === null, `Non-fenced text at ${pos} was copyable`);
+  });
+  await test('Labelled code blocks have a copy button that copies without moving the cursor', async () => {
+    const text = 'Intro\n\n```swift\nlet a = 1\nprint(a)\n```\n\n```\nplain\n```\n';
+    app.load({ text: '---\ntitle: x\n---\n\n' + text, name: 'Copy.md' }); blur(); await tick();
+    const buttons = $$('.cm-md-copy-code');
+    assert(buttons.length === 1 && buttons[0].closest('.cm-md-fence-label')?.textContent.startsWith('swift'), `Expected one button on the swift block, found ${buttons.length}`);
+    const copied = [];
+    const original = MarginCodeCopy.copy;
+    MarginCodeCopy.copy = value => copied.push(value);
+    try {
+      const selection = view.state.selection.main.head;
+      buttons[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+      buttons[0].click(); await tick();
+      assert(copied.length === 1 && copied[0] === 'let a = 1\nprint(a)', 'Copied ' + JSON.stringify(copied));
+      assert(view.state.selection.main.head === selection, 'Clicking the copy button moved the cursor');
+      assert(buttons[0].textContent === 'Copied', 'Copy button gave no feedback');
+    } finally { MarginCodeCopy.copy = original; }
+    cursorAt(view.state.doc.toString().indexOf('let a')); await tick();
+    assert(!document.querySelector('.cm-md-copy-code'), 'Copy button shown while editing the block');
+    blur(); await tick();
+    assert(app.getMarkdown() === '---\ntitle: x\n---\n\n' + text, 'Copying changed the Markdown');
+  });
   app.load({ text: app.welcome, name: 'Welcome.md' });
   app.command('folder', { name: 'My Writing', children: [{ name: 'Welcome.md', path: '/Welcome.md' }, { name: 'Notes', children: [{ name: 'A small idea.md', path: '/idea.md' }, { name: 'Reading list.md', path: '/reading.md' }] }] });
   await tick();
